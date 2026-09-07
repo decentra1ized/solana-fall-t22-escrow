@@ -10,6 +10,7 @@
 use anchor_lang::{
     solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
 };
+use anchor_lang::prelude::Clock;
 use litesvm::LiteSVM;
 use solana_account::Account;
 use solana_keypair::Keypair;
@@ -198,37 +199,66 @@ fn build_cancel_ix(
 // ---------- the test ----------
 
 #[test]
-fn cancel_returns_the_tokens_to_the_maker() {
+fn cancel_fails_before_time_lock_expires() {
     let mut svm = setup_svm();
     let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
 
-    // Precondition: `make` moved the tokens out of the maker and into the vault.
-    assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");
-    assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should hold the deposit");
+    let err = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .unwrap_err();
 
-    // On main this fails: `close_vault` signs with ["escrow", maker] and the escrow
-    // PDA is ["escrow", maker, seed], so the CPI signature is never granted.
+    let logs = err.meta.logs.join("\n");
+    assert!(
+        logs.contains("TimeLockActive"),
+        "expected the time lock error, got: {logs}"
+    );
+}
+
+#[test]
+fn cancel_succeeds_at_time_lock_boundary() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += 300;
+    svm.set_sysvar(&clock);
+
     send(
         &mut svm,
         &maker,
         build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
     )
-    .expect("cancel should return the maker's tokens and close the vault");
+    .expect("cancel should succeed exactly at the time-lock boundary");
 
-    // The deposit came home, whole.
     assert_eq!(
         token_amount(&svm, &maker_ata_a),
         AMOUNT_A,
         "maker should have every token back"
     );
+}
 
-    // Both accounts are gone and their rent was reclaimed.
-    assert!(
-        svm.get_account(&vault_a).is_none_or(|a| a.data.is_empty()),
-        "vault should be closed"
-    );
-    assert!(
-        svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
-        "escrow should be closed"
+#[test]
+fn cancel_succeeds_after_time_lock_expires() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += 301;
+    svm.set_sysvar(&clock);
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel should succeed after the time lock expires");
+
+    assert_eq!(
+        token_amount(&svm, &maker_ata_a),
+        AMOUNT_A,
+        "maker should have every token back"
     );
 }

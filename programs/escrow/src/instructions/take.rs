@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_spl::{associated_token::AssociatedToken, token_interface::{Mint, TokenAccount, TokenInterface}};
+use anchor_spl::{associated_token::{AssociatedToken, get_associated_token_address}, token_interface::{Mint, TokenAccount, TokenInterface}};
 
 use crate::Escrow;
 
@@ -11,9 +11,11 @@ pub struct Take<'info> {
     pub maker: SystemAccount<'info>,
     #[account(
         mut,
-        close = taker, 
-        has_one = mint_a, 
+        close = taker,
+        has_one = mint_a,
         has_one = mint_b,
+        seeds = [b"escrow", escrow.maker.as_ref(), escrow.seed.to_le_bytes().as_ref()],
+        bump = escrow.bump,
     )]
     pub escrow: Account<'info, Escrow>,
     pub mint_a: InterfaceAccount<'info, Mint>,

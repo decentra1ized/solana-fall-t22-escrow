@@ -1253,6 +1253,7 @@ dependencies = [
  "anchor-spl",
  "litesvm",
  "solana-account",
+ "solana-clock",
  "solana-keypair",
  "solana-message",
  "solana-program-option",

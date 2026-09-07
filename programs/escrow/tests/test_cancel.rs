@@ -7,9 +7,7 @@
 // Each file in tests/ is its own crate, so the setup helpers are copied from
 // test_make.rs rather than shared.
 
-use anchor_lang::{
-    solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
-};
+use anchor_lang::{solana_program::instruction::Instruction, InstructionData, ToAccountMetas};
 use litesvm::LiteSVM;
 use solana_account::Account;
 use solana_keypair::Keypair;
@@ -111,7 +109,9 @@ fn send(
 }
 
 fn token_amount(svm: &LiteSVM, address: &Pubkey) -> u64 {
-    let account = svm.get_account(address).expect("token account should exist");
+    let account = svm
+        .get_account(address)
+        .expect("token account should exist");
     TokenAccount::unpack(&account.data)
         .expect("should deserialize as a token account")
         .amount
@@ -203,8 +203,16 @@ fn cancel_returns_the_tokens_to_the_maker() {
     let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
 
     // Precondition: `make` moved the tokens out of the maker and into the vault.
-    assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");
-    assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should hold the deposit");
+    assert_eq!(
+        token_amount(&svm, &maker_ata_a),
+        0,
+        "maker should be empty after make"
+    );
+    assert_eq!(
+        token_amount(&svm, &vault_a),
+        AMOUNT_A,
+        "vault should hold the deposit"
+    );
 
     // On main this fails: `close_vault` signs with ["escrow", maker] and the escrow
     // PDA is ["escrow", maker, seed], so the CPI signature is never granted.
@@ -228,7 +236,8 @@ fn cancel_returns_the_tokens_to_the_maker() {
         "vault should be closed"
     );
     assert!(
-        svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
+        svm.get_account(&escrow_pda)
+            .is_none_or(|a| a.data.is_empty()),
         "escrow should be closed"
     );
 }

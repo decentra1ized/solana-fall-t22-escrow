@@ -25,6 +25,7 @@ anchor-spl = "1.0.2"
 
 [dev-dependencies]
 litesvm = "0.16.0"
+solana-clock = "~3.1"
 solana-message = "~4.4"
 solana-transaction = "~4.1.6"
 solana-signer = "3.0.0"

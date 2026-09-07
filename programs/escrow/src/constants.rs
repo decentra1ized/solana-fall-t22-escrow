@@ -4,4 +4,4 @@ use anchor_lang::prelude::*;
 pub const SEED: &str = "anchor";
 
 #[constant]
-pub const TIME_LOCK:i64 = 300;
+pub const TIME_LOCK: i64 = 300;

@@ -24,7 +24,7 @@ anchor-lang = { version = "1.1.2", features = ["init-if-needed"] }
 anchor-spl = "1.0.2"
 
 [dev-dependencies]
-litesvm = "0.16.0"
+litesvm = { version = "0.16.0", features = ["register-tracing"] }
 solana-clock = "~3.1"
 solana-message = "~4.4"
 solana-transaction = "~4.1.6"

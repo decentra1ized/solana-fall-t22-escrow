@@ -247,6 +247,8 @@ fn take_swaps_tokens_after_timelock() {
 
     advance_clock(&mut svm, escrow::TIME_LOCK + 1);
 
+    let maker_lamports_before = svm.get_balance(&escrow.maker.pubkey()).unwrap();
+
     send(&mut svm, &taker, take_ix(&escrow, &taker.pubkey()))
         .expect("take should succeed after the lock");
 
@@ -267,6 +269,10 @@ fn take_swaps_tokens_after_timelock() {
     );
     assert_closed(&svm, &escrow.vault_a, "vault");
     assert_closed(&svm, &escrow.escrow, "escrow");
+    assert!(
+        svm.get_balance(&escrow.maker.pubkey()).unwrap() > maker_lamports_before,
+        "maker should reclaim escrow + vault rent"
+    );
 }
 
 #[test]
@@ -332,4 +338,30 @@ fn take_rejects_wrong_mint_b() {
     let err = send(&mut svm, &taker, ix).expect_err("has_one = mint_b should reject a decoy mint");
 
     assert_logs_contain(&err, "ConstraintHasOne");
+}
+
+#[test]
+fn take_rejects_wrong_maker() {
+    let mut svm = setup_svm();
+    let escrow = setup_escrow(&mut svm);
+    let (taker, _) = setup_taker(&mut svm, escrow.mint_b, AMOUNT_B);
+    let decoy = Keypair::new();
+    svm.airdrop(&decoy.pubkey(), 10_000_000_000).unwrap();
+
+    advance_clock(&mut svm, escrow::TIME_LOCK + 1);
+
+    // Real escrow PDA, but a random "maker" so B tokens / rent would be redirected.
+    let ix = build_take_ix(
+        &taker.pubkey(),
+        &decoy.pubkey(),
+        escrow.escrow,
+        escrow.mint_a,
+        escrow.mint_b,
+        escrow.vault_a,
+    );
+
+    let err = send(&mut svm, &taker, ix).expect_err("decoy maker must not match the escrow PDA");
+
+    // seeds = [escrow, maker, seed] is checked before has_one; either would be enough.
+    assert_logs_contain(&err, "ConstraintSeeds");
 }

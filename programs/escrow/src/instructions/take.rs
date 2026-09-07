@@ -14,9 +14,12 @@ pub struct Take<'info> {
     pub maker: SystemAccount<'info>,
     #[account(
         mut,
-        close = taker, 
-        has_one = mint_a, 
+        close = maker,
+        has_one = maker,
+        has_one = mint_a,
         has_one = mint_b,
+        seeds = [b"escrow", maker.key().as_ref(), &escrow.seed.to_le_bytes()],
+        bump = escrow.bump,
     )]
     pub escrow: Box<Account<'info, Escrow>>,
     pub mint_a: InterfaceAccount<'info, Mint>,

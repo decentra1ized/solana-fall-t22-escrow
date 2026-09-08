@@ -33,6 +33,7 @@ solana-account = "4.3.2"
 solana-pubkey = "3.0.0"
 solana-program-pack = "3.1.0"
 solana-program-option = "3.1.0"
+solana-clock = "3.1.1"
 spl-token-interface = "2.0.0"
 spl-associated-token-account-interface = "2.0.0"
 

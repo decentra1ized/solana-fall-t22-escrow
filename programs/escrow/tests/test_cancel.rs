@@ -7,9 +7,8 @@
 // Each file in tests/ is its own crate, so the setup helpers are copied from
 // test_make.rs rather than shared.
 
-use anchor_lang::{
-    solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
-};
+use anchor_lang::prelude::Clock;
+use anchor_lang::{solana_program::instruction::Instruction, InstructionData, ToAccountMetas};
 use litesvm::LiteSVM;
 use solana_account::Account;
 use solana_keypair::Keypair;
@@ -28,6 +27,7 @@ use spl_token_interface::{
 const SEED: u16 = 42;
 const AMOUNT_A: u64 = 1_000_000;
 const AMOUNT_B: u64 = 500_000;
+const CANCEL_DELAY_SECONDS: i64 = 300;
 
 // ---------- copied from test_make.rs ----------
 
@@ -111,7 +111,9 @@ fn send(
 }
 
 fn token_amount(svm: &LiteSVM, address: &Pubkey) -> u64 {
-    let account = svm.get_account(address).expect("token account should exist");
+    let account = svm
+        .get_account(address)
+        .expect("token account should exist");
     TokenAccount::unpack(&account.data)
         .expect("should deserialize as a token account")
         .amount
@@ -198,13 +200,25 @@ fn build_cancel_ix(
 // ---------- the test ----------
 
 #[test]
-fn cancel_returns_the_tokens_to_the_maker() {
+fn cancel_returns_the_tokens_to_the_maker_after_timelock() {
     let mut svm = setup_svm();
     let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
 
     // Precondition: `make` moved the tokens out of the maker and into the vault.
-    assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");
-    assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should hold the deposit");
+    assert_eq!(
+        token_amount(&svm, &maker_ata_a),
+        0,
+        "maker should be empty after make"
+    );
+    assert_eq!(
+        token_amount(&svm, &vault_a),
+        AMOUNT_A,
+        "vault should hold the deposit"
+    );
+
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += CANCEL_DELAY_SECONDS + 1;
+    svm.set_sysvar(&clock);
 
     // On main this fails: `close_vault` signs with ["escrow", maker] and the escrow
     // PDA is ["escrow", maker, seed], so the CPI signature is never granted.
@@ -228,7 +242,92 @@ fn cancel_returns_the_tokens_to_the_maker() {
         "vault should be closed"
     );
     assert!(
-        svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
+        svm.get_account(&escrow_pda)
+            .is_none_or(|a| a.data.is_empty()),
         "escrow should be closed"
     );
+}
+
+#[test]
+fn cancel_returns_the_tokens_to_the_maker_just_after_timelock() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // Precondition: `make` moved the tokens out of the maker and into the vault.
+    assert_eq!(
+        token_amount(&svm, &maker_ata_a),
+        0,
+        "maker should be empty after make"
+    );
+    assert_eq!(
+        token_amount(&svm, &vault_a),
+        AMOUNT_A,
+        "vault should hold the deposit"
+    );
+
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += CANCEL_DELAY_SECONDS;
+    svm.set_sysvar(&clock);
+
+    // On main this fails: `close_vault` signs with ["escrow", maker] and the escrow
+    // PDA is ["escrow", maker, seed], so the CPI signature is never granted.
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel should return the maker's tokens and close the vault");
+
+    // The deposit came home, whole.
+    assert_eq!(
+        token_amount(&svm, &maker_ata_a),
+        AMOUNT_A,
+        "maker should have every token back"
+    );
+
+    // Both accounts are gone and their rent was reclaimed.
+    assert!(
+        svm.get_account(&vault_a).is_none_or(|a| a.data.is_empty()),
+        "vault should be closed"
+    );
+    assert!(
+        svm.get_account(&escrow_pda)
+            .is_none_or(|a| a.data.is_empty()),
+        "escrow should be closed"
+    );
+}
+
+#[test]
+fn cancel_rejects_if_called_before_timelock() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // Precondition: `make` moved the tokens out of the maker and into the vault.
+    assert_eq!(
+        token_amount(&svm, &maker_ata_a),
+        0,
+        "maker should be empty after make"
+    );
+    assert_eq!(
+        token_amount(&svm, &vault_a),
+        AMOUNT_A,
+        "vault should hold the deposit"
+    );
+
+    // On main this fails: `close_vault` signs with ["escrow", maker] and the escrow
+    // PDA is ["escrow", maker, seed], so the CPI signature is never granted.
+    let res = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    );
+
+    assert!(res.is_err(), "cancel transaction should fail");
+    assert!(res
+        .err()
+        .unwrap()
+        .meta
+        .logs
+        .iter()
+        .any(|s| s.contains("TimeLockActive")));
 }

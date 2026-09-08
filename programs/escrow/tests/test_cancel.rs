@@ -6,12 +6,22 @@
 //
 // Each file in tests/ is its own crate, so the setup helpers are copied from
 // test_make.rs rather than shared.
+//
+// Time-lock tests:
+// - cancel_too_early_is_rejected: cancel within the 5-minute window must fail with
+//   CancelTooEarly.
+// - cancel_at_boundary_succeeds: cancel exactly at created_at + 300 s must succeed
+//   (boundary is inclusive).
+//
+// LiteSVM clock note: warp_to_slot does NOT move unix_timestamp. The only way to
+// advance unix_timestamp is set_sysvar::<Clock>(&clock).
 
 use anchor_lang::{
     solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
+use solana_clock::Clock;
 use solana_keypair::Keypair;
 use solana_message::{Message, VersionedMessage};
 use solana_program_option::COption;
@@ -29,7 +39,11 @@ const SEED: u16 = 42;
 const AMOUNT_A: u64 = 1_000_000;
 const AMOUNT_B: u64 = 500_000;
 
-// ---------- copied from test_make.rs ----------
+/// The cancel delay constant mirrored from the program — must stay in sync with
+/// `constants::CANCEL_DELAY_SECONDS`.
+const CANCEL_DELAY_SECONDS: i64 = 300;
+
+// ---------- setup helpers ----------
 
 fn setup_mint(svm: &mut LiteSVM, mint: &Keypair, authority: &Pubkey, decimals: u8) {
     let state = Mint {
@@ -195,8 +209,19 @@ fn build_cancel_ix(
     )
 }
 
-// ---------- the test ----------
+/// Advance the LiteSVM clock's unix_timestamp by `delta_seconds`.
+///
+/// `warp_to_slot` does NOT move unix_timestamp — only `set_sysvar` does.
+fn advance_clock(svm: &mut LiteSVM, delta_seconds: i64) {
+    let mut clock: Clock = svm.get_sysvar();
+    clock.unix_timestamp += delta_seconds;
+    svm.set_sysvar(&clock);
+}
 
+// ---------- the tests ----------
+
+/// Existing regression test: cancel succeeds after the lock window and returns all
+/// tokens to the maker while closing both the vault and the escrow accounts.
 #[test]
 fn cancel_returns_the_tokens_to_the_maker() {
     let mut svm = setup_svm();
@@ -205,6 +230,9 @@ fn cancel_returns_the_tokens_to_the_maker() {
     // Precondition: `make` moved the tokens out of the maker and into the vault.
     assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");
     assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should hold the deposit");
+
+    // Advance past the 5-minute lock so cancel is allowed.
+    advance_clock(&mut svm, CANCEL_DELAY_SECONDS);
 
     // On main this fails: `close_vault` signs with ["escrow", maker] and the escrow
     // PDA is ["escrow", maker, seed], so the CPI signature is never granted.
@@ -230,5 +258,58 @@ fn cancel_returns_the_tokens_to_the_maker() {
     assert!(
         svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
         "escrow should be closed"
+    );
+}
+
+/// Cancel attempted 1 second after make must be rejected with CancelTooEarly.
+/// Vault tokens must be completely untouched — the guard fires before any CPI.
+#[test]
+fn cancel_too_early_is_rejected() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // Advance only 1 second — well inside the 5-minute (300 s) lock window.
+    advance_clock(&mut svm, 1);
+
+    let result = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    );
+
+    assert!(
+        result.is_err(),
+        "cancel should fail while inside the 5-minute lock window"
+    );
+
+    // Vault must still hold the tokens — nothing moved.
+    assert_eq!(
+        token_amount(&svm, &vault_a),
+        AMOUNT_A,
+        "vault tokens must be untouched when cancel is rejected"
+    );
+}
+
+/// Cancel attempted exactly at created_at + 300 s must succeed (boundary is inclusive,
+/// the program uses `now >= earliest_cancel`).
+#[test]
+fn cancel_at_boundary_succeeds() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // Advance exactly to the boundary: now == created_at + CANCEL_DELAY_SECONDS.
+    advance_clock(&mut svm, CANCEL_DELAY_SECONDS);
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel exactly at the boundary (now == created_at + 300) must succeed");
+
+    assert_eq!(
+        token_amount(&svm, &maker_ata_a),
+        AMOUNT_A,
+        "maker should have all tokens back after boundary cancel"
     );
 }

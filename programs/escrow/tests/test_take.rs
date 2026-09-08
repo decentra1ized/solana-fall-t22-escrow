@@ -2,7 +2,6 @@ use anchor_lang::{solana_program::instruction::Instruction, InstructionData, ToA
 use litesvm::types::FailedTransactionMetadata;
 use litesvm::LiteSVM;
 use solana_account::Account;
-use solana_clock::Clock;
 use solana_keypair::Keypair;
 use solana_message::{Message, VersionedMessage};
 use solana_program_option::COption;
@@ -115,12 +114,6 @@ fn assert_logs_contain(err: &FailedTransactionMetadata, needle: &str) {
         "expected log `{needle}`, got:\n{}",
         err.meta.pretty_logs()
     );
-}
-
-fn advance_clock(svm: &mut LiteSVM, seconds: i64) {
-    let mut clock = svm.get_sysvar::<Clock>();
-    clock.unix_timestamp += seconds;
-    svm.set_sysvar(&clock);
 }
 
 struct LiveEscrow {
@@ -238,19 +231,17 @@ fn take_ix(escrow: &LiveEscrow, taker: &Pubkey) -> Instruction {
 }
 
 #[test]
-fn take_swaps_tokens_after_timelock() {
+fn take_swaps_tokens() {
     let mut svm = setup_svm();
     let escrow = setup_escrow(&mut svm);
     let (taker, taker_ata_b) = setup_taker(&mut svm, escrow.mint_b, AMOUNT_B);
     let taker_ata_a = get_associated_token_address(&taker.pubkey(), &escrow.mint_a);
     let maker_ata_b = get_associated_token_address(&escrow.maker.pubkey(), &escrow.mint_b);
 
-    advance_clock(&mut svm, escrow::TIME_LOCK + 1);
-
     let maker_lamports_before = svm.get_balance(&escrow.maker.pubkey()).unwrap();
 
     send(&mut svm, &taker, take_ix(&escrow, &taker.pubkey()))
-        .expect("take should succeed after the lock");
+        .expect("take should succeed immediately");
 
     assert_eq!(
         token_amount(&svm, &taker_ata_a),
@@ -276,39 +267,10 @@ fn take_swaps_tokens_after_timelock() {
 }
 
 #[test]
-fn take_rejects_while_timelock_is_active() {
-    let mut svm = setup_svm();
-    let escrow = setup_escrow(&mut svm);
-    let (taker, _) = setup_taker(&mut svm, escrow.mint_b, AMOUNT_B);
-
-    let err = send(&mut svm, &taker, take_ix(&escrow, &taker.pubkey()))
-        .expect_err("take should fail before the lock expires");
-
-    assert_logs_contain(&err, "Escrow in timelock");
-}
-
-#[test]
-fn take_rejects_at_exact_timelock_boundary() {
-    let mut svm = setup_svm();
-    let escrow = setup_escrow(&mut svm);
-    let (taker, _) = setup_taker(&mut svm, escrow.mint_b, AMOUNT_B);
-
-    // require!(created_at + TIME_LOCK < now) — equality is still locked.
-    advance_clock(&mut svm, escrow::TIME_LOCK);
-
-    let err = send(&mut svm, &taker, take_ix(&escrow, &taker.pubkey()))
-        .expect_err("take should fail when now == created_at + TIME_LOCK");
-
-    assert_logs_contain(&err, "Escrow in timelock");
-}
-
-#[test]
 fn take_rejects_when_taker_lacks_amount_b() {
     let mut svm = setup_svm();
     let escrow = setup_escrow(&mut svm);
     let (taker, _) = setup_taker(&mut svm, escrow.mint_b, AMOUNT_B - 1);
-
-    advance_clock(&mut svm, escrow::TIME_LOCK + 1);
 
     let err = send(&mut svm, &taker, take_ix(&escrow, &taker.pubkey()))
         .expect_err("take should fail when the taker cannot pay amount_b");
@@ -323,8 +285,6 @@ fn take_rejects_wrong_mint_b() {
     let decoy = Keypair::new();
     setup_mint(&mut svm, &decoy, &escrow.maker.pubkey(), 6);
     let (taker, _) = setup_taker(&mut svm, decoy.pubkey(), AMOUNT_B);
-
-    advance_clock(&mut svm, escrow::TIME_LOCK + 1);
 
     let ix = build_take_ix(
         &taker.pubkey(),
@@ -347,8 +307,6 @@ fn take_rejects_wrong_maker() {
     let (taker, _) = setup_taker(&mut svm, escrow.mint_b, AMOUNT_B);
     let decoy = Keypair::new();
     svm.airdrop(&decoy.pubkey(), 10_000_000_000).unwrap();
-
-    advance_clock(&mut svm, escrow::TIME_LOCK + 1);
 
     // Real escrow PDA, but a random "maker" so B tokens / rent would be redirected.
     let ix = build_take_ix(

@@ -4,7 +4,7 @@ use anchor_spl::{
     token_interface::{Mint, TokenAccount, TokenInterface},
 };
 
-use crate::{error::ErrorCode, Escrow, TIME_LOCK};
+use crate::Escrow;
 
 #[derive(Accounts)]
 pub struct Take<'info> {
@@ -56,12 +56,7 @@ pub struct Take<'info> {
 }
 
 pub fn handler(ctx: Context<Take>) -> Result<()> {
-    let now = Clock::get()?.unix_timestamp;
     // Transfer amount_b from taker to maker
-    require!(
-        ctx.accounts.escrow.created_at + TIME_LOCK < now,
-        ErrorCode::TimeLockError
-    );
     let cpi_accounts = anchor_spl::token_interface::TransferChecked {
         from: ctx.accounts.taker_ata_b.to_account_info(),
         mint: ctx.accounts.mint_b.to_account_info(),

@@ -8,8 +8,10 @@
 // test_make.rs rather than shared.
 
 use anchor_lang::{solana_program::instruction::Instruction, InstructionData, ToAccountMetas};
+use litesvm::types::FailedTransactionMetadata;
 use litesvm::LiteSVM;
 use solana_account::Account;
+use solana_clock::Clock;
 use solana_keypair::Keypair;
 use solana_message::{Message, VersionedMessage};
 use solana_program_option::COption;
@@ -106,6 +108,20 @@ fn send(
     let msg = Message::new_with_blockhash(&[ix], Some(&payer.pubkey()), &blockhash);
     let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &[payer]).unwrap();
     svm.send_transaction(tx)
+}
+
+fn assert_logs_contain(err: &FailedTransactionMetadata, needle: &str) {
+    assert!(
+        err.meta.logs.iter().any(|l| l.contains(needle)),
+        "expected log `{needle}`, got:\n{}",
+        err.meta.pretty_logs()
+    );
+}
+
+fn advance_clock(svm: &mut LiteSVM, seconds: i64) {
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += seconds;
+    svm.set_sysvar(&clock);
 }
 
 fn token_amount(svm: &LiteSVM, address: &Pubkey) -> u64 {
@@ -214,8 +230,8 @@ fn cancel_returns_the_tokens_to_the_maker() {
         "vault should hold the deposit"
     );
 
-    // On main this fails: `close_vault` signs with ["escrow", maker] and the escrow
-    // PDA is ["escrow", maker, seed], so the CPI signature is never granted.
+    advance_clock(&mut svm, escrow::TIME_LOCK + 1);
+
     send(
         &mut svm,
         &maker,
@@ -240,4 +256,37 @@ fn cancel_returns_the_tokens_to_the_maker() {
             .is_none_or(|a| a.data.is_empty()),
         "escrow should be closed"
     );
+}
+
+#[test]
+fn cancel_rejects_while_timelock_is_active() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    let err = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect_err("cancel should fail before the lock expires");
+
+    assert_logs_contain(&err, "Escrow in timelock");
+}
+
+#[test]
+fn cancel_rejects_at_exact_timelock_boundary() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // require!(created_at + TIME_LOCK < now) — equality is still locked.
+    advance_clock(&mut svm, escrow::TIME_LOCK);
+
+    let err = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect_err("cancel should fail when now == created_at + TIME_LOCK");
+
+    assert_logs_contain(&err, "Escrow in timelock");
 }

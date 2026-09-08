@@ -32,7 +32,7 @@ pub struct Cancel<'info> {
 pub fn handler(ctx: Context<Cancel>) -> Result<()> {
     require!(
         Clock::get()?.unix_timestamp >= ctx.accounts.escrow.created_at.checked_add(CANCEL_DELAY_SECONDS).ok_or(ErrorCode::CustomError)?,
-        ErrorCode::CustomError
+        ErrorCode::TimeLockActive
     );
     let cpi_accounts = anchor_spl::token_interface::TransferChecked {
         from: ctx.accounts.vault_a.to_account_info(),

@@ -11,6 +11,7 @@ use anchor_lang::{
     solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
 };
 use anchor_lang::prelude::Clock;
+use escrow::CANCEL_DELAY_SECONDS;
 use litesvm::LiteSVM;
 use solana_account::Account;
 use solana_keypair::Keypair;
@@ -203,7 +204,7 @@ fn cancel_returns_the_tokens_to_the_maker() {
     let mut svm = setup_svm();
     let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
     let mut clock = svm.get_sysvar::<Clock>();
-    clock.unix_timestamp += 301;
+    clock.unix_timestamp += CANCEL_DELAY_SECONDS + 1;
     svm.set_sysvar(&clock);
 
     // Precondition: `make` moved the tokens out of the maker and into the vault.
@@ -256,7 +257,7 @@ fn cancel_fails_if_too_early() {
     let logs = err.meta.logs.join("\n");
 
     assert!(
-        logs.contains("CustomError"),
+        logs.contains("TimeLockActive"),
         "expected the time lock error, got {logs}"
     );
 }
@@ -266,7 +267,7 @@ fn cancel_succeeds_after_late_enough(){
     let mut svm = setup_svm();
     let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
     let mut clock = svm.get_sysvar::<Clock>();
-    clock.unix_timestamp += 301;
+    clock.unix_timestamp += CANCEL_DELAY_SECONDS + 1;
     svm.set_sysvar(&clock);
 
     // Precondition: `make` moved the tokens out of the maker and into the vault.

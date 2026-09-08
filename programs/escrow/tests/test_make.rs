@@ -99,6 +99,17 @@ fn test_make() {
     let maker_ata_a = get_associated_token_address(&maker_pk, &mint_a_pk);
     setup_token_account(&mut svm, maker_ata_a, mint_a_pk, maker_pk, amount_a);
 
+    // FIXME: Caught bug in test setup
+    // Ideally mint/burn should be separate setup function or real instructions that
+    // replicate actual Solana token program behaviour.
+    //
+    // let mint_a_account = svm.get_account(&mint_a_pk).unwrap();
+    // let mint_a_state = Mint::unpack(&mint_a_account.data).unwrap();
+    // assert_eq!(
+    //     mint_a_state.supply, amount_a,
+    //     "Supply does not reflect balances from ATA"
+    // );
+
     // Derive escrow PDA and vault ATA (vault is created by the instruction, not pre-created)
     let (escrow_pda, _bump) = Pubkey::find_program_address(
         &[b"escrow", maker_pk.as_ref(), &seed.to_le_bytes()],
@@ -144,8 +155,7 @@ fn test_make() {
 
     // Verify escrow account was populated correctly
     let escrow_raw = svm.get_account(&escrow_pda).unwrap();
-    let escrow_state =
-        escrow::Escrow::try_deserialize(&mut escrow_raw.data.as_slice()).unwrap();
+    let escrow_state = escrow::Escrow::try_deserialize(&mut escrow_raw.data.as_slice()).unwrap();
     assert_eq!(escrow_state.maker, maker_pk);
     assert_eq!(escrow_state.mint_a, mint_a_pk);
     assert_eq!(escrow_state.mint_b, mint_b_pk);

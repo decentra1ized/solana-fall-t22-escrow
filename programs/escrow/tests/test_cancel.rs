@@ -202,6 +202,10 @@ fn cancel_returns_the_tokens_to_the_maker() {
     let mut svm = setup_svm();
     let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
 
+    let mut clock = svm.get_sysvar::<anchor_lang::prelude::Clock>();
+    clock.unix_timestamp += 301;
+    svm.set_sysvar(&clock);
+
     // Precondition: `make` moved the tokens out of the maker and into the vault.
     assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");
     assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should hold the deposit");
@@ -230,5 +234,79 @@ fn cancel_returns_the_tokens_to_the_maker() {
     assert!(
         svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
         "escrow should be closed"
+    );
+}
+
+#[test]
+fn cancel_rejected_before_timelock_expires() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    let result = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    );
+
+    let err = result.expect_err("cancel should fail while timelock is active");
+
+    let logs = err.meta.logs;
+    assert!(
+        logs.iter().any(|log| log.contains("TimeLockActive")),
+        "expected TimeLockActive error in logs, got: {logs:?}"
+    );
+
+    // Important: the failed cancel must not move the deposit.
+    assert_eq!(
+        token_amount(&svm, &vault_a),
+        AMOUNT_A,
+        "vault should still hold the deposit"
+    );
+}
+
+#[test]
+fn cancel_succeeds_after_timelock_expires() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // Move the Clock forward by more than the 5-minute delay.
+    let mut clock = svm.get_sysvar::<anchor_lang::prelude::Clock>();
+    clock.unix_timestamp += 301;
+    svm.set_sysvar(&clock);
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel should succeed after timelock expires");
+
+    assert_eq!(
+        token_amount(&svm, &maker_ata_a),
+        AMOUNT_A,
+        "maker should receive the deposit back"
+    );
+}
+
+#[test]
+fn cancel_succeeds_at_exact_timelock_boundary() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    let mut clock = svm.get_sysvar::<anchor_lang::prelude::Clock>();
+    clock.unix_timestamp += 300;
+    svm.set_sysvar(&clock);
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel should succeed at exactly 300 seconds");
+
+    assert_eq!(
+        token_amount(&svm, &maker_ata_a),
+        AMOUNT_A,
+        "maker should receive the deposit back"
     );
 }

@@ -15,35 +15,40 @@ pub struct Take<'info> {
         has_one = mint_a, 
         has_one = mint_b,
     )]
-    pub escrow: Account<'info, Escrow>,
-    pub mint_a: InterfaceAccount<'info, Mint>,
-    pub mint_b: InterfaceAccount<'info, Mint>,
+    // Boxed to keep `Escrow` off the stack: `try_accounts` for this context was
+    // already close to Solana's 4096-byte per-function stack limit, and adding
+    // `created_at` to `Escrow` pushed it over. Boxing moves the account to the
+    // heap instead, which Anchor's `close`/`has_one` constraints support the
+    // same way as an unboxed `Account`.
+    pub escrow: Box<Account<'info, Escrow>>,
+    pub mint_a: Box<InterfaceAccount<'info, Mint>>,
+    pub mint_b: Box<InterfaceAccount<'info, Mint>>,
     #[account(
         init_if_needed,
         payer = taker,
         associated_token::mint = mint_a,
         associated_token::authority = taker,
     )]
-    pub taker_ata_a: InterfaceAccount<'info, TokenAccount>,
+    pub taker_ata_a: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         mut,
         associated_token::mint = mint_a,
         associated_token::authority = taker,
     )]
-    pub taker_ata_b: InterfaceAccount<'info, TokenAccount>,
+    pub taker_ata_b: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         init_if_needed,
         payer = taker,
         associated_token::mint = mint_b,
         associated_token::authority = maker,
     )]
-    pub maker_ata_b: InterfaceAccount<'info, TokenAccount>,
+    pub maker_ata_b: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         mut,
         associated_token::mint = mint_a,
         associated_token::authority = escrow,
     )]
-    pub vault_a: InterfaceAccount<'info, TokenAccount>,
+    pub vault_a: Box<InterfaceAccount<'info, TokenAccount>>,
     pub system_program: Program<'info, System>,
     pub token_program: Interface<'info, TokenInterface>,
     pub associated_token_program: Program<'info, AssociatedToken>,

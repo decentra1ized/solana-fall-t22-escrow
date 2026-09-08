@@ -8,6 +8,7 @@
 // test_make.rs rather than shared.
 
 use anchor_lang::{
+    prelude::Clock,
     solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
 };
 use litesvm::LiteSVM;
@@ -28,6 +29,9 @@ use spl_token_interface::{
 const SEED: u16 = 42;
 const AMOUNT_A: u64 = 1_000_000;
 const AMOUNT_B: u64 = 500_000;
+
+/// The assignment's five-minute delay; mirrors CANCEL_DELAY_SECONDS in constants.rs.
+const CANCEL_DELAY: i64 = 300;
 
 // ---------- copied from test_make.rs ----------
 
@@ -115,6 +119,15 @@ fn token_amount(svm: &LiteSVM, address: &Pubkey) -> u64 {
     TokenAccount::unpack(&account.data)
         .expect("should deserialize as a token account")
         .amount
+}
+
+/// Moves the SVM's wall clock forward. LiteSVM's `warp_to_slot` changes the slot
+/// but leaves `unix_timestamp` untouched, and `Clock::unix_timestamp` is what the
+/// program reads — so the sysvar itself must be rewritten.
+fn advance_clock(svm: &mut LiteSVM, seconds: i64) {
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += seconds;
+    svm.set_sysvar(&clock);
 }
 
 /// Creates a funded maker and a live escrow holding AMOUNT_A of mint A.
@@ -208,6 +221,9 @@ fn cancel_returns_the_tokens_to_the_maker() {
 
     // On main this fails: `close_vault` signs with ["escrow", maker] and the escrow
     // PDA is ["escrow", maker, seed], so the CPI signature is never granted.
+    // The time lock (created_at + CANCEL_DELAY_SECONDS) must have elapsed first,
+    // so move the clock before cancelling.
+    advance_clock(&mut svm, CANCEL_DELAY);
     send(
         &mut svm,
         &maker,
@@ -230,5 +246,91 @@ fn cancel_returns_the_tokens_to_the_maker() {
     assert!(
         svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
         "escrow should be closed"
+    );
+}
+
+// ---------- the time lock ----------
+
+/// Cancels while the five-minute lock is still running: the program must refuse
+/// before moving a single token.
+#[test]
+fn cancel_before_the_time_lock_fails() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // No clock movement: a fresh LiteSVM starts at unix_timestamp = 0, which is
+    // exactly what `make` stamped into created_at.
+    let res = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    );
+
+    let err = res.expect_err("cancel must be rejected while the time lock is active");
+    assert!(
+        format!("{:?}", err.meta.logs).contains("TimeLockActive"),
+        "expected TimeLockActive in the failure logs, got: {:?}",
+        err.meta.logs
+    );
+
+    // Nothing moved: the deposit still sits in the vault, the maker is still empty.
+    assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault must be untouched");
+    assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker must have received nothing");
+    assert!(
+        svm.get_account(&escrow_pda).is_some_and(|a| !a.data.is_empty()),
+        "escrow must still exist"
+    );
+}
+
+/// The boundary case: at exactly created_at + CANCEL_DELAY_SECONDS the lock has
+/// elapsed — this is the only test that can tell `>=` from `>`.
+#[test]
+fn cancel_exactly_at_the_boundary_succeeds() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    advance_clock(&mut svm, CANCEL_DELAY);
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel must be allowed exactly at created_at + CANCEL_DELAY_SECONDS");
+
+    assert_eq!(
+        token_amount(&svm, &maker_ata_a),
+        AMOUNT_A,
+        "maker should have every token back"
+    );
+    assert!(
+        svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
+        "escrow should be closed"
+    );
+}
+
+/// Past the boundary the maker can always reclaim the deposit.
+#[test]
+fn cancel_after_the_time_lock_succeeds() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    advance_clock(&mut svm, CANCEL_DELAY + 1);
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel must be allowed after the time lock has elapsed");
+
+    assert_eq!(
+        token_amount(&svm, &maker_ata_a),
+        AMOUNT_A,
+        "maker should have every token back"
+    );
+    assert!(
+        svm.get_account(&vault_a).is_none_or(|a| a.data.is_empty()),
+        "vault should be closed"
     );
 }

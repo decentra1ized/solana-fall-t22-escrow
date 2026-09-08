@@ -10,6 +10,8 @@
 use anchor_lang::{
     solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
 };
+use anchor_lang::prelude::Clock;
+use escrow::CANCEL_DELAY_SECONDS;
 use litesvm::LiteSVM;
 use solana_account::Account;
 use solana_keypair::Keypair;
@@ -201,6 +203,9 @@ fn build_cancel_ix(
 fn cancel_returns_the_tokens_to_the_maker() {
     let mut svm = setup_svm();
     let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += CANCEL_DELAY_SECONDS + 1;
+    svm.set_sysvar(&clock);
 
     // Precondition: `make` moved the tokens out of the maker and into the vault.
     assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");
@@ -231,4 +236,48 @@ fn cancel_returns_the_tokens_to_the_maker() {
         svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
         "escrow should be closed"
     );
+}
+
+#[test]
+fn cancel_fails_if_too_early() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // Precondition: `make` moved the tokens out of the maker and into the vault.
+    assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");
+    assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should hold the deposit");
+
+    // The escrow was created just now, so canceling it immediately is too early.
+    let res= send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    );
+    let err= res.unwrap_err();
+    let logs = err.meta.logs.join("\n");
+
+    assert!(
+        logs.contains("TimeLockActive"),
+        "expected the time lock error, got {logs}"
+    );
+}
+
+#[test]
+fn cancel_succeeds_after_late_enough(){
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += CANCEL_DELAY_SECONDS + 1;
+    svm.set_sysvar(&clock);
+
+    // Precondition: `make` moved the tokens out of the maker and into the vault.
+    assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");
+    assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should hold the deposit");
+
+    // The escrow was created just now, so canceling it immediately is too early.
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    ).expect("cancel should succeed after the time lock expires");
 }

@@ -2,6 +2,8 @@ use anchor_lang::prelude::*;
 
 #[error_code]
 pub enum ErrorCode {
+    #[msg("the time has not elapsed")]
+    TimeLockActive,
     #[msg("Custom error message")]
     CustomError,
 }

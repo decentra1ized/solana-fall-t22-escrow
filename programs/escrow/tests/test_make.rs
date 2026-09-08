@@ -144,11 +144,11 @@ fn test_make() {
 
     // Verify escrow account was populated correctly
     let escrow_raw = svm.get_account(&escrow_pda).unwrap();
-    let escrow_state =
-        escrow::Escrow::try_deserialize(&mut escrow_raw.data.as_slice()).unwrap();
+    let escrow_state = escrow::Escrow::try_deserialize(&mut escrow_raw.data.as_slice()).unwrap();
     assert_eq!(escrow_state.maker, maker_pk);
     assert_eq!(escrow_state.mint_a, mint_a_pk);
     assert_eq!(escrow_state.mint_b, mint_b_pk);
     assert_eq!(escrow_state.amount_a, amount_a);
     assert_eq!(escrow_state.amount_b, amount_b);
+    assert_eq!(escrow_state.created_at, 0);
 }

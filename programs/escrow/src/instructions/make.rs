@@ -39,13 +39,14 @@ pub struct Make<'info> {
     pub associated_token_program: Program<'info, AssociatedToken>,
 }
 
-pub fn handler(ctx: Context<Make>, seed: u16, amount_a: u64, amount_b: u64) -> Result<()> {
+pub fn handler(ctx: Context<Make>, seed: u16, amount_a: u64, amount_b: u64, created_at: i64) -> Result<()> {
     ctx.accounts.escrow.set_inner(Escrow {
         maker: ctx.accounts.maker.key(),
         mint_a: ctx.accounts.mint_a.key(),
         mint_b: ctx.accounts.mint_b.key(),
         amount_a,
         amount_b,
+        created_at,
         seed,
         bump: ctx.bumps.escrow,
     });

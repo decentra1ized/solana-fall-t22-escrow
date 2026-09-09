@@ -11,6 +11,7 @@ use solana_pubkey::Pubkey;
 use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
 use spl_associated_token_account_interface::address::get_associated_token_address;
+use solana_clock::Clock;
 use spl_token_interface::{
     state::{Account as TokenAccount, AccountState, Mint},
     ID as TOKEN_PROGRAM_ID,
@@ -94,6 +95,9 @@ fn test_make() {
     let seed: u16 = 42;
     let amount_a: u64 = 1_000_000;
     let amount_b: u64 = 500_000;
+    // Set up time.
+    let clock: Clock = svm.get_sysvar();
+    let created_at = clock.unix_timestamp;
 
     // Pre-create maker's ATA for mint_a with the tokens to be deposited
     let maker_ata_a = get_associated_token_address(&maker_pk, &mint_a_pk);
@@ -112,6 +116,7 @@ fn test_make() {
             seed,
             amount_a,
             amount_b,
+            created_at
         }
         .data(),
         escrow::accounts::Make {
@@ -151,4 +156,114 @@ fn test_make() {
     assert_eq!(escrow_state.mint_b, mint_b_pk);
     assert_eq!(escrow_state.amount_a, amount_a);
     assert_eq!(escrow_state.amount_b, amount_b);
+}
+
+#[test]
+fn test_time_lockup_violation() {
+    let program_id = escrow::id();
+    let mut svm = LiteSVM::new();
+    let bytes = include_bytes!("../../../target/deploy/escrow.so");
+    svm.add_program(program_id, bytes).unwrap();
+
+    let maker = Keypair::new();
+    let mint_a = Keypair::new();
+    let mint_b = Keypair::new();
+
+    let maker_pk = maker.pubkey();
+    let mint_a_pk = mint_a.pubkey();
+    let mint_b_pk = mint_b.pubkey();
+
+    svm.airdrop(&maker_pk, 10_000_000_000).unwrap();
+
+    setup_mint(&mut svm, &mint_a, &maker_pk, 6);
+    setup_mint(&mut svm, &mint_b, &maker_pk, 6);
+
+    let seed: u16 = 42;
+    let amount_a: u64 = 1_000_000;
+    let amount_b: u64 = 500_000;
+
+    // Create initial time or the created at time.
+    let initial_clock: Clock = svm.get_sysvar();
+    let created_at = initial_clock.unix_timestamp;
+
+    // Pre create maker's ATA for mint_a with tokens to be deposited
+    let maker_ata_a = get_associated_token_address(&maker_pk, &mint_a_pk);
+    setup_token_account(&mut svm, maker_ata_a, mint_a_pk, maker_pk, amount_a);
+    // Derive escrow PDA and vault ATA
+    let (escrow_pda, _bump) = Pubkey::find_program_address(
+        &[b"escrow", maker_pk.as_ref(), &seed.to_le_bytes()],
+        &program_id
+    );
+    let vault_a = get_associated_token_address(&escrow_pda, &mint_a_pk);
+    let make_instruction = Instruction::new_with_bytes(
+        program_id,
+        &escrow::instruction::Make {
+            seed, amount_a, amount_b, created_at
+        }.data(),
+        escrow::accounts::Make {
+            maker: maker_pk,
+            mint_a: mint_a_pk,
+            mint_b: mint_b_pk,
+            escrow: escrow_pda,
+            maker_ata_a,
+            vault_a,
+            system_program: anchor_lang::system_program::ID,
+            token_program: TOKEN_PROGRAM_ID,
+            associated_token_program: spl_associated_token_account_interface::program::ID,
+        }.to_account_metas(None),
+    );
+    let blockhash = svm.latest_blockhash();
+    let msg = Message::new_with_blockhash(&[make_instruction], Some(&maker_pk), &blockhash);
+    let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &[maker]).unwrap();
+    let res = svm.send_transaction(tx);
+    assert!(res.is_ok(), "Make transaction failed in lockup violation test: {:?}", res.err());
+
+    // PERFORMING A FUTURE TAKER TRANSACTION THAT VIOLATES THE TIMELOCK SETTING.
+    // Time warp.
+    let duration_in_seconds: i64 = 200;
+    // Creating a modified clock state.
+    let mut warped_clock = initial_clock.clone();
+    warped_clock.unix_timestamp = initial_clock.unix_timestamp + duration_in_seconds;
+    // We need slot progression alongside timestamp updates.
+    // Assuming 400ms target block time. 200s = 500 slots 
+    warped_clock.slot = initial_clock.slot + 500;
+    // Overwrite the clock sysvar inside LiteSVM
+    svm.set_sysvar(&warped_clock);
+    // Verify the warp worked.
+    let final_clock: Clock = svm.get_sysvar();
+    assert_eq!(final_clock.unix_timestamp, created_at + duration_in_seconds);
+
+    // Accounts. taker, maker, escrow, mint_a, mint_b, taker_ata_a, taker_ata_b, maker_ata_b,
+    // vault_a, system_program, token_program, associted_token_program
+    let taker = Keypair::new();
+    let taker_pk = taker.pubkey();
+    let taker_ata_a = get_associated_token_address(&taker_pk, &mint_a_pk);
+    let taker_ata_b = get_associated_token_address(&taker_pk, &mint_b_pk);
+    let maker_ata_b = get_associated_token_address(&maker_pk, &mint_b_pk);
+    let take_instruction = Instruction::new_with_bytes(
+        program_id,
+        &escrow::instruction::Take {}.data(),
+        escrow::accounts::Take {
+            taker: taker_pk,
+            maker: maker_pk,
+            escrow: escrow_pda,
+            mint_a: mint_a_pk,
+            mint_b: mint_b_pk,
+            taker_ata_a,
+            taker_ata_b,
+            maker_ata_b,
+            vault_a,
+            system_program: anchor_lang::system_program::ID,
+            token_program: TOKEN_PROGRAM_ID,
+            associated_token_program: spl_associated_token_account_interface::program::ID,
+        }.to_account_metas(None),
+    );
+
+    let take_blockhash = svm.latest_blockhash();
+    let take_msg = Message::new_with_blockhash(&[take_instruction], Some(&taker_pk), &take_blockhash);
+    let take_tx = VersionedTransaction::try_new(VersionedMessage::Legacy(take_msg), &[taker]).unwrap();
+
+    let take_res = svm.send_transaction(take_tx);
+    println!("The take res is {:#?}", take_res);
+    assert!(take_res.is_err(), "Funds locked. Lock time violated");
 }

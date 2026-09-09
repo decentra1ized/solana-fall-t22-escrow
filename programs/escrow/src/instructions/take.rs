@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::{associated_token::AssociatedToken, token_interface::{Mint, TokenAccount, TokenInterface}};
 
-use crate::Escrow;
+use crate::{Escrow, CANCEL_DELAY_SECONDS, VaultError};
 
 #[derive(Accounts)]
 pub struct Take<'info> {
@@ -50,6 +50,14 @@ pub struct Take<'info> {
 }
 
 pub fn handler(ctx: Context<Take>) -> Result<()> {
+    // Check the lock time duration.
+    let clock = Clock::get()?;
+    let current_time = clock.unix_timestamp;
+    let escrow_time = ctx.accounts.escrow.created_at;
+    let lock_period = current_time.checked_sub(escrow_time).unwrap_or(0);
+    // Fail fast if withdrawal is attempted before lock duration is passed.
+    require!(lock_period < CANCEL_DELAY_SECONDS, VaultError::FundsTimeLock);
+
     // Transfer amount_b from taker to maker
     let cpi_accounts = anchor_spl::token_interface::TransferChecked {
         from: ctx.accounts.taker_ata_b.to_account_info(),

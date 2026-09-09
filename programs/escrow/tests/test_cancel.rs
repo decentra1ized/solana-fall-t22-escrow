@@ -18,6 +18,7 @@ use solana_program_option::COption;
 use solana_program_pack::Pack;
 use solana_pubkey::Pubkey;
 use solana_signer::Signer;
+use solana_clock::Clock;
 use solana_transaction::versioned::VersionedTransaction;
 use spl_associated_token_account_interface::address::get_associated_token_address;
 use spl_token_interface::{
@@ -34,8 +35,7 @@ const AMOUNT_B: u64 = 500_000;
 fn setup_mint(svm: &mut LiteSVM, mint: &Keypair, authority: &Pubkey, decimals: u8) {
     let state = Mint {
         mint_authority: COption::Some(*authority),
-        supply: 0,
-        decimals,
+        supply: 0, decimals,
         is_initialized: true,
         freeze_authority: COption::None,
     };
@@ -146,12 +146,16 @@ fn setup_escrow(svm: &mut LiteSVM) -> (Keypair, Pubkey, Pubkey, Pubkey, Pubkey) 
     // `make` creates the vault, so only derive its address here.
     let vault_a = get_associated_token_address(&escrow_pda, &mint_a_pk);
 
+    let clock: Clock = svm.get_sysvar();
+    let created_at = clock.unix_timestamp;
+
     let ix = Instruction::new_with_bytes(
         escrow::id(),
         &escrow::instruction::Make {
             seed: SEED,
             amount_a: AMOUNT_A,
             amount_b: AMOUNT_B,
+            created_at
         }
         .data(),
         escrow::accounts::Make {

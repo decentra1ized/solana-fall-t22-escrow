@@ -1,7 +1,12 @@
 use anchor_lang::prelude::*;
 
 #[error_code]
-pub enum ErrorCode {
-    #[msg("Custom error message")]
-    CustomError,
+pub enum EscrowError {
+    InvalidAmount,
+
+    #[msg("Escrow is still locked")]
+    TimeLockActive,
+
+    #[msg("Timestamp overflow")]
+    Overflow,
 }

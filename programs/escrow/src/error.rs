@@ -2,6 +2,6 @@ use anchor_lang::prelude::*;
 
 #[error_code]
 pub enum ErrorCode {
-    #[msg("Custom error message")]
-    CustomError,
+    #[msg("Cancellation is not allowed until 5 minutes after creation")]
+    CancelTooEarly,
 }

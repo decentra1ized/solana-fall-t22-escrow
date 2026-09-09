@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 
-use crate::Escrow;
+use crate::{error::ErrorCode, Escrow, CANCEL_DELAY_SECONDS};
 
 #[derive(Accounts)]
 pub struct Cancel<'info> {
@@ -43,13 +43,27 @@ pub fn handler(ctx: Context<Cancel>) -> Result<()> {
         &[ctx.accounts.escrow.bump],
     ];
     let signer = &[&seeds[..]];
-    let cpi_ctx = CpiContext::new_with_signer(ctx.accounts.token_program.key(), cpi_accounts, signer);
-    anchor_spl::token_interface::transfer_checked(cpi_ctx, ctx.accounts.vault_a.amount, ctx.accounts.mint_a.decimals)?;
+    let cpi_ctx =
+        CpiContext::new_with_signer(ctx.accounts.token_program.key(), cpi_accounts, signer);
+    anchor_spl::token_interface::transfer_checked(
+        cpi_ctx,
+        ctx.accounts.vault_a.amount,
+        ctx.accounts.mint_a.decimals,
+    )?;
 
     close_vault(ctx)
 }
 
 pub fn close_vault(ctx: Context<Cancel>) -> Result<()> {
+    let expiration_delay_time = ctx
+        .accounts
+        .escrow
+        .created_at
+        .checked_add(CANCEL_DELAY_SECONDS)
+        .ok_or(ErrorCode::MathOverflow)?;
+    let now = Clock::get()?.unix_timestamp;
+    require!(now >= expiration_delay_time, ErrorCode::TimeLockActive);
+
     let cpi_accounts = anchor_spl::token_interface::CloseAccount {
         account: ctx.accounts.vault_a.to_account_info(),
         destination: ctx.accounts.maker.to_account_info(),
@@ -60,14 +74,11 @@ pub fn close_vault(ctx: Context<Cancel>) -> Result<()> {
         &b"escrow"[..],
         ctx.accounts.escrow.maker.as_ref(),
         &ctx.accounts.escrow.seed.to_le_bytes(),
-        &[ctx.accounts.escrow.bump]
+        &[ctx.accounts.escrow.bump],
     ];
     let signer_seeds = &[&seeds[..]];
 
-    let cpi_ctx = CpiContext::new_with_signer(
-        ctx.accounts.token_program.key(), 
-        cpi_accounts, 
-        signer_seeds
-    );
+    let cpi_ctx =
+        CpiContext::new_with_signer(ctx.accounts.token_program.key(), cpi_accounts, signer_seeds);
     anchor_spl::token_interface::close_account(cpi_ctx)
 }

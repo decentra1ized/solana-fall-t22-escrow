@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 
-use crate::Escrow;
+use crate::{error::ErrorCode, CANCEL_DELAY_SECONDS, Escrow};
 
 #[derive(Accounts)]
 pub struct Cancel<'info> {
@@ -43,6 +43,16 @@ pub fn handler(ctx: Context<Cancel>) -> Result<()> {
         &[ctx.accounts.escrow.bump],
     ];
     let signer = &[&seeds[..]];
+    let unlock_at = ctx
+        .accounts
+        .escrow
+        .created_at
+        .checked_add(CANCEL_DELAY_SECONDS)
+        .ok_or(ErrorCode::TimeLockActive)?;
+    require!(
+        Clock::get()?.unix_timestamp >= unlock_at,
+        ErrorCode::TimeLockActive
+    );
     let cpi_ctx = CpiContext::new_with_signer(ctx.accounts.token_program.key(), cpi_accounts, signer);
     anchor_spl::token_interface::transfer_checked(cpi_ctx, ctx.accounts.vault_a.amount, ctx.accounts.mint_a.decimals)?;
 

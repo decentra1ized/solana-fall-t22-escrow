@@ -8,7 +8,8 @@
 // test_make.rs rather than shared.
 
 use anchor_lang::{
-    solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
+    prelude::Clock, solana_program::instruction::Instruction, AccountDeserialize, InstructionData,
+    ToAccountMetas,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
@@ -117,6 +118,19 @@ fn token_amount(svm: &LiteSVM, address: &Pubkey) -> u64 {
         .amount
 }
 
+fn warp_unix_timestamp(svm: &mut LiteSVM, seconds: i64) {
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += seconds;
+    svm.set_sysvar(&clock);
+}
+
+fn escrow_created_at(svm: &LiteSVM, escrow: &Pubkey) -> i64 {
+    let raw = svm.get_account(escrow).expect("escrow should exist");
+    escrow::Escrow::try_deserialize(&mut raw.data.as_slice())
+        .expect("should deserialize as escrow")
+        .created_at
+}
+
 /// Creates a funded maker and a live escrow holding AMOUNT_A of mint A.
 ///
 /// Returns (maker, escrow PDA, mint A, maker's ATA for A, the escrow's vault).
@@ -195,19 +209,40 @@ fn build_cancel_ix(
     )
 }
 
-// ---------- the test ----------
+// ---------- the tests ----------
+
+#[test]
+fn cancel_early_returns_error() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    let err = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect_err("cancel should be rejected while the time lock is active");
+
+    let logs = err.meta.logs.join("\n");
+    assert!(
+        logs.contains("TimeLockActive"),
+        "expected TimeLockActive, logs:\n{logs}"
+    );
+
+    assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should still hold the deposit");
+    assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should still be empty");
+}
 
 #[test]
 fn cancel_returns_the_tokens_to_the_maker() {
     let mut svm = setup_svm();
     let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
 
-    // Precondition: `make` moved the tokens out of the maker and into the vault.
     assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");
     assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should hold the deposit");
 
-    // On main this fails: `close_vault` signs with ["escrow", maker] and the escrow
-    // PDA is ["escrow", maker, seed], so the CPI signature is never granted.
+    warp_unix_timestamp(&mut svm, escrow::CANCEL_DELAY_SECONDS + 1);
+
     send(
         &mut svm,
         &maker,
@@ -215,20 +250,40 @@ fn cancel_returns_the_tokens_to_the_maker() {
     )
     .expect("cancel should return the maker's tokens and close the vault");
 
-    // The deposit came home, whole.
+    assert_cancel_settled(&svm, &maker_ata_a, &vault_a, &escrow_pda);
+}
+
+#[test]
+fn cancel_at_exactly_the_delay_succeeds() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp = escrow_created_at(&svm, &escrow_pda) + escrow::CANCEL_DELAY_SECONDS;
+    svm.set_sysvar(&clock);
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel at created_at + 300 must succeed");
+
+    assert_cancel_settled(&svm, &maker_ata_a, &vault_a, &escrow_pda);
+}
+
+fn assert_cancel_settled(svm: &LiteSVM, maker_ata_a: &Pubkey, vault_a: &Pubkey, escrow_pda: &Pubkey) {
     assert_eq!(
-        token_amount(&svm, &maker_ata_a),
+        token_amount(svm, maker_ata_a),
         AMOUNT_A,
         "maker should have every token back"
     );
-
-    // Both accounts are gone and their rent was reclaimed.
     assert!(
-        svm.get_account(&vault_a).is_none_or(|a| a.data.is_empty()),
+        svm.get_account(vault_a).is_none_or(|a| a.data.is_empty()),
         "vault should be closed"
     );
     assert!(
-        svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
+        svm.get_account(escrow_pda).is_none_or(|a| a.data.is_empty()),
         "escrow should be closed"
     );
 }

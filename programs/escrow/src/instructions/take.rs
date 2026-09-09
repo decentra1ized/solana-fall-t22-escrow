@@ -51,12 +51,13 @@ pub struct Take<'info> {
 
 pub fn handler(ctx: Context<Take>) -> Result<()> {
     // Check the lock time duration.
+    let escrow_time = ctx.accounts.escrow.created_at;
     let clock = Clock::get()?;
     let current_time = clock.unix_timestamp;
-    let escrow_time = ctx.accounts.escrow.created_at;
-    let lock_period = current_time.checked_sub(escrow_time).unwrap_or(0);
+    let lock_period = current_time.checked_sub(escrow_time)
+        .ok_or(VaultError::FundsTimeLock)?;
     // Fail fast if withdrawal is attempted before lock duration is passed.
-    require!(lock_period < CANCEL_DELAY_SECONDS, VaultError::FundsTimeLock);
+    require!(lock_period > CANCEL_DELAY_SECONDS, VaultError::FundsTimeLock);
 
     // Transfer amount_b from taker to maker
     let cpi_accounts = anchor_spl::token_interface::TransferChecked {

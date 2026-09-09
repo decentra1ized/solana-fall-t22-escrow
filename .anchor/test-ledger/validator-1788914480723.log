@@ -1,0 +1,39 @@
+[2026-09-09T00:41:20.726398600Z INFO  solana_test_validator] agave-validator 4.2.2 (src:e29e5d91; feat:21b0d33a, client:Agave)
+[2026-09-09T00:41:20.728392800Z INFO  solana_test_validator] Starting validator with: ArgsOs {
+        inner: [
+            "solana-test-validator",
+            "--ledger",
+            ".anchor/test-ledger",
+            "--mint",
+            "7hStvB8adcodN69mgMDewqynXxC15EdsZgvYkMNSPp6h",
+            "--bpf-program",
+            "8hVo1qi4VPNuieLP9NFpuUcDA9CLT8aMooo9exCunTQF",
+            "/home/SolarDePin/solana-summer-escrow/target/deploy/escrow.so",
+        ],
+    }
+[2026-09-09T00:41:20.729644100Z INFO  solana_perf] AVX detected
+[2026-09-09T00:41:20.729659300Z INFO  solana_perf] AVX2 detected
+[2026-09-09T00:41:20.756170800Z INFO  solana_faucet::faucet] Faucet started. Listening on: 0.0.0.0:9900
+[2026-09-09T00:41:20.756209400Z INFO  solana_faucet::faucet] Faucet account address: ACJPCnEmrE1W9XpCRjD49t8pDoQHs514XVVkhjpbMJo8
+[2026-09-09T00:41:20.761277500Z INFO  agave_validator::admin_rpc_service] started admin rpc service!
+[2026-09-09T00:41:20.761928300Z INFO  solana_test_validator] Feature for a1penGLz8Vm2QHYB3JPefBiU4BY3Z6JkW2k3Scw5GWP deactivated
+[2026-09-09T00:41:20.810156200Z INFO  solana_ledger::blockstore] Opening blockstore at ".anchor/test-ledger/rocksdb"
+[2026-09-09T00:41:20.812124500Z WARN  solana_ledger::blockstore_db] Unable to detect Rocks columns: Error { message: "IO error: No such file or directory: While opening a file for sequentially reading: .anchor/test-ledger/rocksdb/CURRENT: No such file or directory" }
+[2026-09-09T00:41:20.936291600Z INFO  solana_ledger::blockstore] Opening blockstore done; blockstore open took 126ms
+[2026-09-09T00:41:20.968810700Z INFO  solana_metrics::metrics] metrics disabled: environment variable not found
+[2026-09-09T00:41:21.091648100Z INFO  agave_snapshots::unarchive] Extracting ".anchor/test-ledger/genesis.tar.bz2"...
+[2026-09-09T00:41:21.097006200Z INFO  agave_io_uring] io_uring NOT supported: Function not implemented (os error 38)
+[2026-09-09T00:41:21.168862300Z INFO  agave_snapshots::hardened_unpack] unpacked 1 entries total
+[2026-09-09T00:41:21.168995100Z INFO  agave_snapshots::unarchive] Extracted ".anchor/test-ledger/genesis.tar.bz2" in 77.1024ms
+
+thread 'main' (14940) panicked at gossip/src/node.rs:283:10:
+broadcast multi_bind: Os { code: 98, kind: AddrInUse, message: "Address already in use" }
+stack backtrace:
+   0: __rustc::rust_begin_unwind
+   1: core::panicking::panic_fmt
+   2: core::result::unwrap_failed
+   3: solana_gossip::node::Node::new_with_external_ip
+   4: solana_test_validator::TestValidator::start
+   5: solana_test_validator::TestValidatorGenesis::start_with_mint_address_and_geyser_plugin_rpc
+   6: solana_test_validator::main
+note: Some details are omitted, run with `RUST_BACKTRACE=full` for a verbose backtrace.

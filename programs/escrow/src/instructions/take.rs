@@ -1,5 +1,8 @@
 use anchor_lang::prelude::*;
-use anchor_spl::{associated_token::AssociatedToken, token_interface::{Mint, TokenAccount, TokenInterface}};
+use anchor_spl::{
+    associated_token::AssociatedToken,
+    token_interface::{Mint, TokenAccount, TokenInterface},
+};
 
 use crate::Escrow;
 
@@ -7,43 +10,51 @@ use crate::Escrow;
 pub struct Take<'info> {
     #[account(mut)]
     pub taker: Signer<'info>,
+
     #[account(mut)]
     pub maker: SystemAccount<'info>,
+
     #[account(
         mut,
-        close = taker, 
-        has_one = mint_a, 
+        close = taker,
+        has_one = mint_a,
         has_one = mint_b,
     )]
-    pub escrow: Account<'info, Escrow>,
-    pub mint_a: InterfaceAccount<'info, Mint>,
-    pub mint_b: InterfaceAccount<'info, Mint>,
+    pub escrow: Box<Account<'info, Escrow>>,
+
+    pub mint_a: Box<InterfaceAccount<'info, Mint>>,
+    pub mint_b: Box<InterfaceAccount<'info, Mint>>,
+
     #[account(
         init_if_needed,
         payer = taker,
         associated_token::mint = mint_a,
         associated_token::authority = taker,
     )]
-    pub taker_ata_a: InterfaceAccount<'info, TokenAccount>,
+    pub taker_ata_a: Box<InterfaceAccount<'info, TokenAccount>>,
+
     #[account(
         mut,
         associated_token::mint = mint_a,
         associated_token::authority = taker,
     )]
-    pub taker_ata_b: InterfaceAccount<'info, TokenAccount>,
+    pub taker_ata_b: Box<InterfaceAccount<'info, TokenAccount>>,
+
     #[account(
         init_if_needed,
         payer = taker,
         associated_token::mint = mint_b,
         associated_token::authority = maker,
     )]
-    pub maker_ata_b: InterfaceAccount<'info, TokenAccount>,
+    pub maker_ata_b: Box<InterfaceAccount<'info, TokenAccount>>,
+
     #[account(
         mut,
         associated_token::mint = mint_a,
         associated_token::authority = escrow,
     )]
-    pub vault_a: InterfaceAccount<'info, TokenAccount>,
+    pub vault_a: Box<InterfaceAccount<'info, TokenAccount>>,
+
     pub system_program: Program<'info, System>,
     pub token_program: Interface<'info, TokenInterface>,
     pub associated_token_program: Program<'info, AssociatedToken>,
@@ -57,7 +68,12 @@ pub fn handler(ctx: Context<Take>) -> Result<()> {
         to: ctx.accounts.maker_ata_b.to_account_info(),
         authority: ctx.accounts.taker.to_account_info(),
     };
-    let cpi_ctx = CpiContext::new(ctx.accounts.token_program.key(), cpi_accounts);
+
+    let cpi_ctx = CpiContext::new(
+        ctx.accounts.token_program.key(),
+        cpi_accounts,
+    );
+
     anchor_spl::token_interface::transfer_checked(
         cpi_ctx,
         ctx.accounts.escrow.amount_b,
@@ -76,15 +92,17 @@ pub fn handler(ctx: Context<Take>) -> Result<()> {
         &b"escrow"[..],
         ctx.accounts.escrow.maker.as_ref(),
         &ctx.accounts.escrow.seed.to_le_bytes(),
-        &[ctx.accounts.escrow.bump]
+        &[ctx.accounts.escrow.bump],
     ];
+
     let signer_seeds = &[&seeds[..]];
 
     let cpi_ctx = CpiContext::new_with_signer(
-        ctx.accounts.token_program.key(), 
-        cpi_accounts, 
-        signer_seeds
+        ctx.accounts.token_program.key(),
+        cpi_accounts,
+        signer_seeds,
     );
+
     anchor_spl::token_interface::transfer_checked(
         cpi_ctx,
         ctx.accounts.escrow.amount_a,
@@ -105,14 +123,16 @@ pub fn close_vault(ctx: Context<Take>) -> Result<()> {
         &b"escrow"[..],
         ctx.accounts.escrow.maker.as_ref(),
         &ctx.accounts.escrow.seed.to_le_bytes(),
-        &[ctx.accounts.escrow.bump]
+        &[ctx.accounts.escrow.bump],
     ];
+
     let signer_seeds = &[&seeds[..]];
 
     let cpi_ctx = CpiContext::new_with_signer(
-        ctx.accounts.token_program.key(), 
-        cpi_accounts, 
-        signer_seeds
+        ctx.accounts.token_program.key(),
+        cpi_accounts,
+        signer_seeds,
     );
+
     anchor_spl::token_interface::close_account(cpi_ctx)
 }

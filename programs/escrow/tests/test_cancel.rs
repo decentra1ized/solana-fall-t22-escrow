@@ -7,8 +7,8 @@
 // Each file in tests/ is its own crate, so the setup helpers are copied from
 // test_make.rs rather than shared.
 
-use anchor_lang::{
-    solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
+use anchor_lang::{ 
+ prelude::Clock, solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
@@ -195,6 +195,11 @@ fn build_cancel_ix(
     )
 }
 
+fn advance_clock(svm: &mut LiteSVM, delta: i64) {
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += delta;
+    svm.set_sysvar(&clock);
+}
 // ---------- the test ----------
 
 #[test]
@@ -231,4 +236,82 @@ fn cancel_returns_the_tokens_to_the_maker() {
         svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
         "escrow should be closed"
     );
+}
+
+#[test]
+fn cancel_too_early_is_rejected() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    let res = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    );
+
+    let err = res.expect_err("cancel should fail");
+    let logs = err.meta.logs.join("\n");
+
+    assert!(
+        logs.contains("TimelockNotElapsed") ||logs.contains("the timelock has not elapsed"),
+        "expected the time lock error, got: {logs}"
+    );
+
+      // Nothing should have moved — the failed instruction had no effect.
+    assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should be untouched");
+
+}
+
+#[test]
+fn cancel_after_delay_succeeds() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    advance_clock(&mut svm, 301); // CANCEL_DELAY_SECONDS + 1
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel should succeed after the delay");
+
+    assert_eq!(
+        token_amount(&svm, &maker_ata_a),
+        AMOUNT_A,
+        "maker should have every token back"
+    );
+
+    assert!(
+        svm.get_account(&vault_a).is_none_or(|a| a.data.is_empty()),
+        "vault should be closed"
+    );
+
+    assert!(
+        svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
+        "escrow should be closed"
+    );
+}
+
+#[test]
+fn cancel_at_exact_boundary_succeeds() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    advance_clock(&mut svm, escrow::constants::CANCEL_DELAY_SECONDS); // CANCEL_DELAY_SECONDS
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel should succeed at the delay boundary");
+
+    assert_eq!(
+        token_amount(&svm, &maker_ata_a),
+        AMOUNT_A,
+        "maker should have every token back"
+    );
+
+
 }

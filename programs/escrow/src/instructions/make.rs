@@ -40,6 +40,7 @@ pub struct Make<'info> {
 }
 
 pub fn handler(ctx: Context<Make>, seed: u16, amount_a: u64, amount_b: u64) -> Result<()> {
+    let now = Clock::get()?.unix_timestamp; // Added solana's clock
     ctx.accounts.escrow.set_inner(Escrow {
         maker: ctx.accounts.maker.key(),
         mint_a: ctx.accounts.mint_a.key(),

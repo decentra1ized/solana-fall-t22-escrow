@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 
-use crate::Escrow;
+use crate::{constants::CANCEL_DELAY_SECONDS, error::ErrorCode, Escrow};
 
 #[derive(Accounts)]
 pub struct Cancel<'info> {
@@ -50,6 +50,16 @@ pub fn handler(ctx: Context<Cancel>) -> Result<()> {
 }
 
 pub fn close_vault(ctx: Context<Cancel>) -> Result<()> {
+    let now = Clock::get()?.unix_timestamp;
+    let unlock_at = ctx
+        .accounts
+        .escrow
+        .created_at
+        .checked_add(CANCEL_DELAY_SECONDS)
+        .ok_or(ErrorCode::TimeLockActive)?;
+
+    require!(now >= unlock_at, ErrorCode::TimeLockActive);
+
     let cpi_accounts = anchor_spl::token_interface::CloseAccount {
         account: ctx.accounts.vault_a.to_account_info(),
         destination: ctx.accounts.maker.to_account_info(),

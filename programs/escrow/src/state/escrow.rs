@@ -10,4 +10,5 @@ pub struct Escrow {
     pub amount_b: u64,          // The amount of the token being requested by the maker
     pub seed: u16,              // The seed used for PDA derivation
     pub bump: u8,               // The bump used for PDA derivation
+    pub created_at: i64,        // new — Unix timestamp, appended at the end (same reasoning as max_withdraw: keep existing byte offsets stable)
 }

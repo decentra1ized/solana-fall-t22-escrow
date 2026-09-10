@@ -9,7 +9,7 @@ pub use constants::*;
 pub use instructions::*;
 pub use state::*;
 
-declare_id!("8hVo1qi4VPNuieLP9NFpuUcDA9CLT8aMooo9exCunTQF");
+declare_id!("ComPRNttrWxrmp7apXY8iU7NsKugLDFZCnt97ifbxoy1");
 
 #[program]
 pub mod escrow {

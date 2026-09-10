@@ -8,8 +8,9 @@
 // test_make.rs rather than shared.
 
 use anchor_lang::{
-    solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
+    prelude::Clock, solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
 };
+
 use litesvm::LiteSVM;
 use solana_account::Account;
 use solana_keypair::Keypair;
@@ -206,6 +207,13 @@ fn cancel_returns_the_tokens_to_the_maker() {
     assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");
     assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should hold the deposit");
 
+    // Advance past the timelock so this test can isolate what it actually
+    // checks — the close_vault signer seeds — independent of the newer
+    // cancel-delay behavior covered by the timelock tests below.
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += 301;
+    svm.set_sysvar(&clock);
+
     // On main this fails: `close_vault` signs with ["escrow", maker] and the escrow
     // PDA is ["escrow", maker, seed], so the CPI signature is never granted.
     send(
@@ -230,5 +238,86 @@ fn cancel_returns_the_tokens_to_the_maker() {
     assert!(
         svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
         "escrow should be closed"
+    );
+}
+
+// ---------- timelock tests ----------
+//
+// The maker cannot cancel for CANCEL_DELAY_SECONDS after the escrow is
+// made. These three tests pin down both ends of that boundary: too early
+// must fail, and the moment the delay elapses — inclusive — must succeed.
+
+#[test]
+fn cancel_before_five_minutes_fails() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // No clock manipulation: cancel is attempted the instant after make,
+    // exactly the scenario the timelock exists to block.
+    let res = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    );
+
+    assert!(res.is_err(), "cancel before 5 minutes must fail");
+
+    // The deposit must still be sitting in the vault — a rejected cancel
+    // should have moved nothing.
+    assert_eq!(
+        token_amount(&svm, &vault_a),
+        AMOUNT_A,
+        "vault should be untouched after a rejected cancel"
+    );
+}
+
+#[test]
+fn cancel_after_five_minutes_succeeds() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // A fresh LiteSVM starts at unix_timestamp = 0, so created_at was
+    // stamped at 0. 301 lands one second past the 300-second delay.
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += 301;
+    svm.set_sysvar(&clock);
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel after 5 minutes should succeed");
+
+    assert_eq!(
+        token_amount(&svm, &maker_ata_a),
+        AMOUNT_A,
+        "maker should have the deposit back"
+    );
+}
+
+#[test]
+fn cancel_at_exact_boundary_succeeds() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // Advancing by exactly 300 lands precisely on created_at + 300 — the
+    // only value that can tell a `>=` implementation from an off-by-one
+    // `>` implementation. 301 above would pass either way; this would not.
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += 300;
+    svm.set_sysvar(&clock);
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel exactly at the boundary should succeed");
+
+    assert_eq!(
+        token_amount(&svm, &maker_ata_a),
+        AMOUNT_A,
+        "maker should have the deposit back at the exact boundary"
     );
 }

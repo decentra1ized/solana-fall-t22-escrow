@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 
-use crate::Escrow;
+use crate::{error::ErrorCode, Escrow, CANCEL_DELAY_SECONDS};
 
 #[derive(Accounts)]
 pub struct Cancel<'info> {
@@ -30,6 +30,23 @@ pub struct Cancel<'info> {
 }
 
 pub fn handler(ctx: Context<Cancel>) -> Result<()> {
+    // The time lock is checked first, before any tokens move.
+    let now = Clock::get()?.unix_timestamp;
+
+    // `checked_add` rather than `+`: release builds wrap on overflow, so a
+    // `created_at` near `i64::MAX` would wrap to a large negative `unlock_at`
+    // and make the comparison below trivially true — opening the lock instead
+    // of holding it. On overflow we refuse to cancel, which fails closed.
+    let unlock_at = ctx
+        .accounts
+        .escrow
+        .created_at
+        .checked_add(CANCEL_DELAY_SECONDS)
+        .ok_or(ErrorCode::TimeLockActive)?;
+
+    // Inclusive: at exactly `created_at + CANCEL_DELAY_SECONDS` the lock is open.
+    require!(now >= unlock_at, ErrorCode::TimeLockActive);
+
     let cpi_accounts = anchor_spl::token_interface::TransferChecked {
         from: ctx.accounts.vault_a.to_account_info(),
         mint: ctx.accounts.mint_a.to_account_info(),

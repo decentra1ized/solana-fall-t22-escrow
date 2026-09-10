@@ -275,6 +275,7 @@ pub fn handler(ctx: Context<Cancel>) -> Result<()> {
 
     close_vault(ctx)
 }
+
 ```
 
 Here, the escrow PDA signs a `transfer_checked` CPI to return all deposited tokens from the vault back to the maker's token account, then closes the now-empty vault to recover its rent.

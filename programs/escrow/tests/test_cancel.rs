@@ -206,6 +206,9 @@ fn cancel_returns_the_tokens_to_the_maker() {
     assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");
     assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should hold the deposit");
 
+    // The lock has to elapse before the maker may reclaim.
+    advance_clock(&mut svm, CANCEL_DELAY_SECONDS + 1);
+
     // On main this fails: `close_vault` signs with ["escrow", maker] and the escrow
     // PDA is ["escrow", maker, seed], so the CPI signature is never granted.
     send(
@@ -231,4 +234,59 @@ fn cancel_returns_the_tokens_to_the_maker() {
         svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
         "escrow should be closed"
     );
+}
+// ---------- time lock ----------
+
+use anchor_lang::prelude::Clock;
+use escrow::constants::CANCEL_DELAY_SECONDS;
+
+/// Moves wall-clock time forward.
+///
+/// `warp_to_slot` advances the slot but leaves `unix_timestamp` untouched, and
+/// the program reads the timestamp — so the sysvar has to be set directly.
+fn advance_clock(svm: &mut LiteSVM, seconds: i64) {
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += seconds;
+    svm.set_sysvar(&clock);
+}
+
+#[test]
+fn cancel_before_the_delay_is_rejected() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    let err = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect_err("cancel should be rejected while the offer is still locked");
+
+    // On the specific error, not merely on failure: a cancel that broke for some
+    // unrelated reason would prove nothing about the time lock.
+    let logs = err.meta.logs.join("\n");
+    assert!(logs.contains("CancelTooEarly"), "failed for the wrong reason:\n{logs}");
+
+    // And nothing moved before the rejection.
+    assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault must be untouched");
+    assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker must not be paid back");
+}
+
+#[test]
+fn cancel_exactly_at_the_delay_succeeds() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // Exactly the delay, not a second more. Paired with the test above, this is
+    // the only thing that distinguishes `>=` from `>`.
+    advance_clock(&mut svm, CANCEL_DELAY_SECONDS);
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel should be allowed exactly at the unlock time");
+
+    assert_eq!(token_amount(&svm, &maker_ata_a), AMOUNT_A);
 }

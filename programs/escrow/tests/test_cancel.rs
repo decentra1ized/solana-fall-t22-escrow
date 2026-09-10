@@ -198,6 +198,56 @@ fn build_cancel_ix(
 // ---------- the test ----------
 
 #[test]
+fn test_cancel_too_early_fails() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // The escrow was just created, so the timelock is still active.
+    let result = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    );
+
+    assert!(
+        result.is_err(),
+        "cancel should fail if the timelock is still active"
+    );
+}
+
+#[test]
+fn test_cancel_after_delay_succeeds() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // Advance the clock past the timelock.
+    svm.advance_clock_by_seconds(301).unwrap();
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel should succeed after the timelock has elapsed");
+}
+
+#[test]
+fn test_cancel_at_exact_boundary_succeeds() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // Advance the clock to the exact moment the timelock expires.
+    svm.advance_clock_by_seconds(300).unwrap();
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel should succeed at the exact moment the timelock expires");
+}
+
+#[test]
 fn cancel_returns_the_tokens_to_the_maker() {
     let mut svm = setup_svm();
     let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);

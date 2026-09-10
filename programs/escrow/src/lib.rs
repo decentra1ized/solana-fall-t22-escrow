@@ -8,8 +8,9 @@ use anchor_lang::prelude::*;
 pub use constants::*;
 pub use instructions::*;
 pub use state::*;
+pub use error::*;
 
-declare_id!("8hVo1qi4VPNuieLP9NFpuUcDA9CLT8aMooo9exCunTQF");
+declare_id!("34mU697nXYwLpn6c7HaZS2VQNmmk9bo2haDYsiAoW5HS");
 
 #[program]
 pub mod escrow {

@@ -1,5 +1,8 @@
 use anchor_lang::{
-    solana_program::instruction::Instruction, AccountDeserialize, InstructionData, ToAccountMetas,
+    solana_program::instruction::Instruction,
+    AccountDeserialize,
+    InstructionData,
+    ToAccountMetas,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
@@ -24,8 +27,10 @@ fn setup_mint(svm: &mut LiteSVM, mint: &Keypair, authority: &Pubkey, decimals: u
         is_initialized: true,
         freeze_authority: COption::None,
     };
+
     let mut data = [0u8; Mint::LEN];
     Mint::pack(state, &mut data).unwrap();
+
     svm.set_account(
         mint.pubkey(),
         Account {
@@ -56,8 +61,10 @@ fn setup_token_account(
         delegated_amount: 0,
         close_authority: COption::None,
     };
+
     let mut data = [0u8; TokenAccount::LEN];
     TokenAccount::pack(state, &mut data).unwrap();
+
     svm.set_account(
         address,
         Account {
@@ -74,7 +81,9 @@ fn setup_token_account(
 #[test]
 fn test_make() {
     let program_id = escrow::id();
+
     let mut svm = LiteSVM::new();
+
     let bytes = include_bytes!("../../../target/deploy/escrow.so");
     svm.add_program(program_id, bytes).unwrap();
 
@@ -95,16 +104,31 @@ fn test_make() {
     let amount_a: u64 = 1_000_000;
     let amount_b: u64 = 500_000;
 
-    // Pre-create maker's ATA for mint_a with the tokens to be deposited
-    let maker_ata_a = get_associated_token_address(&maker_pk, &mint_a_pk);
-    setup_token_account(&mut svm, maker_ata_a, mint_a_pk, maker_pk, amount_a);
+    // Maker's ATA already contains the tokens that will be deposited.
+    let maker_ata_a =
+        get_associated_token_address(&maker_pk, &mint_a_pk);
 
-    // Derive escrow PDA and vault ATA (vault is created by the instruction, not pre-created)
+    setup_token_account(
+        &mut svm,
+        maker_ata_a,
+        mint_a_pk,
+        maker_pk,
+        amount_a,
+    );
+
+    // Derive escrow PDA using the same seeds used by the program.
     let (escrow_pda, _bump) = Pubkey::find_program_address(
-        &[b"escrow", maker_pk.as_ref(), &seed.to_le_bytes()],
+        &[
+            b"escrow",
+            maker_pk.as_ref(),
+            &seed.to_le_bytes(),
+        ],
         &program_id,
     );
-    let vault_a = get_associated_token_address(&escrow_pda, &mint_a_pk);
+
+    // The vault is the ATA owned by the escrow PDA.
+    let vault_a =
+        get_associated_token_address(&escrow_pda, &mint_a_pk);
 
     let instruction = Instruction::new_with_bytes(
         program_id,
@@ -123,32 +147,65 @@ fn test_make() {
             vault_a,
             system_program: anchor_lang::system_program::ID,
             token_program: TOKEN_PROGRAM_ID,
-            associated_token_program: spl_associated_token_account_interface::program::ID,
+            associated_token_program:
+                spl_associated_token_account_interface::program::ID,
         }
         .to_account_metas(None),
     );
 
     let blockhash = svm.latest_blockhash();
-    let msg = Message::new_with_blockhash(&[instruction], Some(&maker_pk), &blockhash);
-    let tx = VersionedTransaction::try_new(VersionedMessage::Legacy(msg), &[maker]).unwrap();
+
+    let msg = Message::new_with_blockhash(
+        &[instruction],
+        Some(&maker_pk),
+        &blockhash,
+    );
+
+    let tx = VersionedTransaction::try_new(
+        VersionedMessage::Legacy(msg),
+        &[maker],
+    )
+    .unwrap();
 
     let res = svm.send_transaction(tx);
-    assert!(res.is_ok(), "make transaction failed: {:?}", res.err());
 
-    // Verify vault received amount_a tokens and is owned by the escrow PDA
+    assert!(
+        res.is_ok(),
+        "make transaction failed: {:?}",
+        res.err()
+    );
+
+    // Verify vault received amount_a tokens.
     let vault_account = svm.get_account(&vault_a).unwrap();
-    let vault_token = TokenAccount::unpack(&vault_account.data).unwrap();
+
+    let vault_token =
+        TokenAccount::unpack(&vault_account.data).unwrap();
+
     assert_eq!(vault_token.amount, amount_a);
     assert_eq!(vault_token.mint, mint_a_pk);
     assert_eq!(vault_token.owner, escrow_pda);
 
-    // Verify escrow account was populated correctly
+    // Verify escrow state.
     let escrow_raw = svm.get_account(&escrow_pda).unwrap();
+
     let escrow_state =
-        escrow::Escrow::try_deserialize(&mut escrow_raw.data.as_slice()).unwrap();
+        escrow::Escrow::try_deserialize(
+            &mut escrow_raw.data.as_slice()
+        )
+        .unwrap();
+
     assert_eq!(escrow_state.maker, maker_pk);
     assert_eq!(escrow_state.mint_a, mint_a_pk);
     assert_eq!(escrow_state.mint_b, mint_b_pk);
     assert_eq!(escrow_state.amount_a, amount_a);
     assert_eq!(escrow_state.amount_b, amount_b);
+    assert_eq!(escrow_state.seed, seed);
+
+    // The escrow was created at the current LiteSVM clock.
+    let clock = svm.get_sysvar::<anchor_lang::prelude::Clock>();
+
+    assert_eq!(
+        escrow_state.created_at,
+        clock.unix_timestamp
+    );
 }

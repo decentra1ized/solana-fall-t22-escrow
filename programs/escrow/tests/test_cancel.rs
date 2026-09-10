@@ -195,7 +195,7 @@ fn build_cancel_ix(
     )
 }
 
-// ---------- the test ----------
+// ---------- the tests ----------
 
 #[test]
 fn cancel_returns_the_tokens_to_the_maker() {
@@ -230,5 +230,48 @@ fn cancel_returns_the_tokens_to_the_maker() {
     assert!(
         svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
         "escrow should be closed"
+    );
+}
+
+#[test]
+fn cannot_cancel_before_time_lock_expires() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    let result = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    );
+
+    assert!(result.is_err(), "cancel should fail immediately after escrow creation");
+    assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should still hold the deposit");
+}
+
+#[test]
+fn can_cancel_after_time_lock_expires() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    let current_slot = svm.get_sysvar::<solana_signer::clock::Clock>().unwrap().slot;
+    let target_slot = current_slot + 500;
+    svm.warp_to_slot(target_slot);
+
+    // Warp doesn't update unix_timestamp, so we need to set the clock sysvar directly
+    let mut clock = svm.get_sysvar::<solana_signer::clock::Clock>().unwrap();
+    clock.unix_timestamp += 400;
+    svm.set_sysvar(&clock);
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel should succeed after time lock expires");
+
+    assert_eq!(
+        token_amount(&svm, &maker_ata_a),
+        AMOUNT_A,
+        "maker should have tokens back"
     );
 }

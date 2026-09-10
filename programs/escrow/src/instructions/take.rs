@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::{associated_token::AssociatedToken, token_interface::{Mint, TokenAccount, TokenInterface}};
 
-use crate::Escrow;
+use crate::{Escrow, CANCEL_DELAY_SECONDS, VaultError};
 
 #[derive(Accounts)]
 pub struct Take<'info> {
@@ -50,6 +50,7 @@ pub struct Take<'info> {
 }
 
 pub fn handler(ctx: Context<Take>) -> Result<()> {
+
     // Transfer amount_b from taker to maker
     let cpi_accounts = anchor_spl::token_interface::TransferChecked {
         from: ctx.accounts.taker_ata_b.to_account_info(),

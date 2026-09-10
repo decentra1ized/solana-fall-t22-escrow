@@ -6,6 +6,7 @@ pub mod state;
 use anchor_lang::prelude::*;
 
 pub use constants::*;
+pub use error::*;
 pub use instructions::*;
 pub use state::*;
 
@@ -15,8 +16,8 @@ declare_id!("8hVo1qi4VPNuieLP9NFpuUcDA9CLT8aMooo9exCunTQF");
 pub mod escrow {
     use super::*;
 
-    pub fn make(ctx: Context<Make>, seed: u16, amount_a: u64, amount_b: u64) -> Result<()> {
-        make::handler(ctx, seed, amount_a, amount_b)
+    pub fn make(ctx: Context<Make>, seed: u16, amount_a: u64, amount_b: u64, created_at: i64) -> Result<()> {
+        make::handler(ctx, seed, amount_a, amount_b, created_at)
     }
 
     pub fn take(ctx: Context<Take>) -> Result<()> {

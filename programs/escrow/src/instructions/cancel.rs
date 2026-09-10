@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 
-use crate::Escrow;
+use crate::{Escrow, VaultError, CANCEL_DELAY_SECONDS};
 
 #[derive(Accounts)]
 pub struct Cancel<'info> {
@@ -30,6 +30,17 @@ pub struct Cancel<'info> {
 }
 
 pub fn handler(ctx: Context<Cancel>) -> Result<()> {
+    // Check the timelock before any token moves.
+    let escrow_time = ctx.accounts.escrow.created_at;
+    let clock = Clock::get()?;
+    let current_time = clock.unix_timestamp;
+    let lock_period = current_time.checked_sub(escrow_time)
+        .ok_or(VaultError::FundsTimeLock)?;
+    msg!("The current slot is: {}", clock.slot);
+    msg!("Escrow created at: {} lock_period: {}", escrow_time, lock_period);
+    // Fail fast if withdrawal is attempted before lock duration is passed.
+    require!(lock_period > CANCEL_DELAY_SECONDS, VaultError::FundsTimeLock);
+
     let cpi_accounts = anchor_spl::token_interface::TransferChecked {
         from: ctx.accounts.vault_a.to_account_info(),
         mint: ctx.accounts.mint_a.to_account_info(),

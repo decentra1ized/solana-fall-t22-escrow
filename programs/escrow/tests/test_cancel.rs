@@ -8,7 +8,10 @@
 // test_make.rs rather than shared.
 
 use anchor_lang::{
-    solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
+    prelude::Clock,
+    solana_program::instruction::Instruction,
+    InstructionData,
+    ToAccountMetas,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
@@ -230,5 +233,99 @@ fn cancel_returns_the_tokens_to_the_maker() {
     assert!(
         svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
         "escrow should be closed"
+    );
+}
+
+#[test]
+fn cancel_too_early() {
+    let mut svm = setup_svm();
+
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) =
+        setup_escrow(&mut svm);
+
+    let res = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(
+            &maker.pubkey(),
+            escrow_pda,
+            mint_a,
+            maker_ata_a,
+            vault_a,
+        ),
+    );
+
+    assert!(res.is_err());
+
+    let err = res.unwrap_err();
+    let logs = err.meta.logs.join("\n");
+
+    assert!(
+        logs.contains("TimeLockActive"),
+        "expected the time lock error, got: {logs}"
+    );
+}
+
+#[test]
+fn cancel_after_time_lock() {
+    let mut svm = setup_svm();
+
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) =
+        setup_escrow(&mut svm);
+
+    // Advance time by more than five minutes.
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += 301;
+    svm.set_sysvar(&clock);
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(
+            &maker.pubkey(),
+            escrow_pda,
+            mint_a,
+            maker_ata_a,
+            vault_a,
+        ),
+    )
+    .expect("cancel should succeed after the time lock");
+
+    assert_eq!(
+        token_amount(&svm, &maker_ata_a),
+        AMOUNT_A,
+        "maker should receive all tokens back"
+    );
+}
+
+#[test]
+fn cancel_at_exact_time_lock_boundary() {
+    let mut svm = setup_svm();
+
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) =
+        setup_escrow(&mut svm);
+
+    // Exactly five minutes.
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += 300;
+    svm.set_sysvar(&clock);
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(
+            &maker.pubkey(),
+            escrow_pda,
+            mint_a,
+            maker_ata_a,
+            vault_a,
+        ),
+    )
+    .expect("cancel should succeed exactly at the time-lock boundary");
+
+    assert_eq!(
+        token_amount(&svm, &maker_ata_a),
+        AMOUNT_A,
+        "maker should receive all tokens back"
     );
 }

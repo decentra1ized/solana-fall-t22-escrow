@@ -8,7 +8,10 @@
 // test_make.rs rather than shared.
 
 use anchor_lang::{
-    solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
+    prelude::Clock,
+    solana_program::instruction::Instruction,
+    InstructionData,
+    ToAccountMetas,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
@@ -28,6 +31,12 @@ use spl_token_interface::{
 const SEED: u16 = 42;
 const AMOUNT_A: u64 = 1_000_000;
 const AMOUNT_B: u64 = 500_000;
+
+fn advance_clock(svm: &mut LiteSVM, seconds: i64) {
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += seconds;
+    svm.set_sysvar(&clock);
+}
 
 // ---------- copied from test_make.rs ----------
 
@@ -230,5 +239,108 @@ fn cancel_returns_the_tokens_to_the_maker() {
     assert!(
         svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
         "escrow should be closed"
+    );
+}
+
+#[test]
+fn cancel_too_early_is_rejected() {
+    let mut svm = setup_svm();
+
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) =
+        setup_escrow(&mut svm);
+
+    let res = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(
+            &maker.pubkey(),
+            escrow_pda,
+            mint_a,
+            maker_ata_a,
+            vault_a,
+        ),
+    );
+
+    let err = res.unwrap_err();
+    let logs = err.meta.logs.join("\n");
+
+    assert!(
+        logs.contains("TimeLockActive"),
+        "expected the time lock error, got: {logs}"
+    );
+}
+
+#[test]
+fn cancel_after_five_minutes_returns_the_tokens() {
+    let mut svm = setup_svm();
+
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) =
+        setup_escrow(&mut svm);
+
+    advance_clock(&mut svm, 301);
+
+    assert_eq!(token_amount(&svm, &maker_ata_a), 0);
+    assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A);
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(
+            &maker.pubkey(),
+            escrow_pda,
+            mint_a,
+            maker_ata_a,
+            vault_a,
+        ),
+    )
+    .expect("cancel should succeed after five minutes");
+
+    assert_eq!(
+        token_amount(&svm, &maker_ata_a),
+        AMOUNT_A
+    );
+
+    assert!(
+        svm.get_account(&vault_a).is_none_or(|a| a.data.is_empty())
+    );
+
+    assert!(
+        svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty())
+    );
+}
+
+#[test]
+fn cancel_at_exactly_five_minutes_succeeds() {
+    let mut svm = setup_svm();
+
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) =
+        setup_escrow(&mut svm);
+
+    advance_clock(&mut svm, 300);
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(
+            &maker.pubkey(),
+            escrow_pda,
+            mint_a,
+            maker_ata_a,
+            vault_a,
+        ),
+    )
+    .expect("cancel should succeed exactly at five minutes");
+
+    assert_eq!(
+        token_amount(&svm, &maker_ata_a),
+        AMOUNT_A
+    );
+
+    assert!(
+        svm.get_account(&vault_a).is_none_or(|a| a.data.is_empty())
+    );
+
+    assert!(
+        svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty())
     );
 }

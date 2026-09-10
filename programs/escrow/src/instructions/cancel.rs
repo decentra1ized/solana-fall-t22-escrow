@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 
-use crate::Escrow;
+use crate::{Escrow, CANCEL_DELAY_SECONDS};	// this is new, subsequently removed ErrorCode
 
 #[derive(Accounts)]
 pub struct Cancel<'info> {
@@ -30,6 +30,16 @@ pub struct Cancel<'info> {
 }
 
 pub fn handler(ctx: Context<Cancel>) -> Result<()> {
+
+    // 1. Grab the current network time
+    let now = Clock::get()?.unix_timestamp;
+    
+    // 2. Calculate the exact second the lock expires
+    let unlock_time = ctx.accounts.escrow.created_at.checked_add(CANCEL_DELAY_SECONDS).unwrap();
+    
+    // 3. The Bouncer: Stop the transaction if it's too early
+    require!(now >= unlock_time, crate::error::ErrorCode::TimeLockActive);	// missing error
+
     let cpi_accounts = anchor_spl::token_interface::TransferChecked {
         from: ctx.accounts.vault_a.to_account_info(),
         mint: ctx.accounts.mint_a.to_account_info(),

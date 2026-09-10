@@ -40,6 +40,9 @@ pub struct Make<'info> {
 }
 
 pub fn handler(ctx: Context<Make>, seed: u16, amount_a: u64, amount_b: u64) -> Result<()> {
+    // added code to get time from Solana
+    let now = Clock::get()?.unix_timestamp;
+
     ctx.accounts.escrow.set_inner(Escrow {
         maker: ctx.accounts.maker.key(),
         mint_a: ctx.accounts.mint_a.key(),
@@ -48,7 +51,11 @@ pub fn handler(ctx: Context<Make>, seed: u16, amount_a: u64, amount_b: u64) -> R
         amount_b,
         seed,
         bump: ctx.bumps.escrow,
+        // and this saves the time into our new state field
+        created_at: now, 
     });
+
+    // everything under here is untouched
 
     let cpi_accounts = TransferChecked {
         from: ctx.accounts.maker_ata_a.to_account_info(),

@@ -198,9 +198,17 @@ fn build_cancel_ix(
 // ---------- the test ----------
 
 #[test]
-fn cancel_returns_the_tokens_to_the_maker() {
+fn cancel_after_time_lock_succeeds() {		// this is new, old (cancel_returns_the_tokens_to_the_maker)
     let mut svm = setup_svm();
     let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // TIME TRAVEL: Fast-forward the blockchain clock 301 seconds
+    use anchor_lang::prelude::Clock;
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += 301;
+    svm.set_sysvar(&clock);
+
+    // end of the new stuff
 
     // Precondition: `make` moved the tokens out of the maker and into the vault.
     assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");
@@ -231,4 +239,23 @@ fn cancel_returns_the_tokens_to_the_maker() {
         svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
         "escrow should be closed"
     );
+}
+
+#[test]				// this is also new, the "too early" rejection test
+fn cancel_too_early_fails() {
+    let mut svm = setup_svm();
+    // `setup_escrow` creates the escrow at timestamp 0
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // Try to cancel immediately, WITHOUT moving the clock
+    let res = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    );
+
+    // Extract the error and prove our bouncer blocked it
+    let err = res.unwrap_err();
+    let logs = err.meta.logs.join("\n");
+    assert!(logs.contains("TimeLockActive"), "expected the time lock error, got: {logs}");
 }

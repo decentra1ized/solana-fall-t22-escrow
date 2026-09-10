@@ -8,7 +8,7 @@
 // test_make.rs rather than shared.
 
 use anchor_lang::{
-    solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
+    prelude::Clock, solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
@@ -198,6 +198,60 @@ fn build_cancel_ix(
 // ---------- the test ----------
 
 #[test]
+fn cancel_too_early_fails_with_time_lock_error() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    let res = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    );
+
+    let err = res.unwrap_err();
+    let logs = err.meta.logs.join("\n");
+
+    assert!(
+        logs.contains("TimeLockActive"),
+        "expected the time lock error, got: {logs}"
+    );
+}
+
+#[test]
+fn cancel_exactly_at_time_lock_boundary_succeeds() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    // Move time to exactly the five-minute boundary.
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += escrow::CANCEL_DELAY_SECONDS;
+    svm.set_sysvar(&clock);
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel exactly at the time-lock boundary should succeed");
+
+    assert_eq!(
+        token_amount(&svm, &maker_ata_a),
+        AMOUNT_A,
+        "maker should have every token back"
+    );
+
+    assert!(
+        svm.get_account(&vault_a).is_none_or(|a| a.data.is_empty()),
+        "vault should be closed"
+    );
+
+    assert!(
+        svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
+        "escrow should be closed"
+    );
+}
+
+#[test]
 fn cancel_returns_the_tokens_to_the_maker() {
     let mut svm = setup_svm();
     let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
@@ -206,8 +260,11 @@ fn cancel_returns_the_tokens_to_the_maker() {
     assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");
     assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should hold the deposit");
 
-    // On main this fails: `close_vault` signs with ["escrow", maker] and the escrow
-    // PDA is ["escrow", maker, seed], so the CPI signature is never granted.
+    // Move time past the five-minute lock.
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += escrow::CANCEL_DELAY_SECONDS + 1;
+    svm.set_sysvar(&clock);
+
     send(
         &mut svm,
         &maker,

@@ -23,6 +23,7 @@ pub struct Escrow {
     pub amount_b: u64,
     pub seed: u16,
     pub bump: u8,
+    pub created_at: i64,
 }
 ```
 
@@ -35,6 +36,11 @@ pub struct Escrow {
 - amount_b: The amount of token B the maker expects to receive from the taker.
 - seed: A u16 seed used to derive the Escrow PDA, allowing a single maker to create multiple concurrent escrows.
 - bump: The canonical bump for the Escrow PDA.
+- created_at: The Unix timestamp at which the escrow was created.
+
+Cancellation is protected by a five-minute timelock. The maker can cancel at
+or after `created_at + 300` seconds, but earlier cancellation attempts are
+rejected and leave the escrow vault untouched.
 
 ---
 

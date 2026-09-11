@@ -1,5 +1,8 @@
 use anchor_lang::prelude::*;
-use anchor_spl::{associated_token::AssociatedToken, token_interface::{Mint, TokenAccount, TokenInterface}};
+use anchor_spl::{
+    associated_token::AssociatedToken,
+    token_interface::{Mint, TokenAccount, TokenInterface},
+};
 
 use crate::Escrow;
 
@@ -24,26 +27,26 @@ pub struct Take<'info> {
         associated_token::mint = mint_a,
         associated_token::authority = taker,
     )]
-    pub taker_ata_a: InterfaceAccount<'info, TokenAccount>,
+    pub taker_ata_a: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         mut,
         associated_token::mint = mint_a,
         associated_token::authority = taker,
     )]
-    pub taker_ata_b: InterfaceAccount<'info, TokenAccount>,
+    pub taker_ata_b: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         init_if_needed,
         payer = taker,
         associated_token::mint = mint_b,
         associated_token::authority = maker,
     )]
-    pub maker_ata_b: InterfaceAccount<'info, TokenAccount>,
+    pub maker_ata_b: Box<InterfaceAccount<'info, TokenAccount>>,
     #[account(
         mut,
         associated_token::mint = mint_a,
         associated_token::authority = escrow,
     )]
-    pub vault_a: InterfaceAccount<'info, TokenAccount>,
+    pub vault_a: Box<InterfaceAccount<'info, TokenAccount>>,
     pub system_program: Program<'info, System>,
     pub token_program: Interface<'info, TokenInterface>,
     pub associated_token_program: Program<'info, AssociatedToken>,
@@ -76,15 +79,12 @@ pub fn handler(ctx: Context<Take>) -> Result<()> {
         &b"escrow"[..],
         ctx.accounts.escrow.maker.as_ref(),
         &ctx.accounts.escrow.seed.to_le_bytes(),
-        &[ctx.accounts.escrow.bump]
+        &[ctx.accounts.escrow.bump],
     ];
     let signer_seeds = &[&seeds[..]];
 
-    let cpi_ctx = CpiContext::new_with_signer(
-        ctx.accounts.token_program.key(), 
-        cpi_accounts, 
-        signer_seeds
-    );
+    let cpi_ctx =
+        CpiContext::new_with_signer(ctx.accounts.token_program.key(), cpi_accounts, signer_seeds);
     anchor_spl::token_interface::transfer_checked(
         cpi_ctx,
         ctx.accounts.escrow.amount_a,
@@ -105,14 +105,11 @@ pub fn close_vault(ctx: Context<Take>) -> Result<()> {
         &b"escrow"[..],
         ctx.accounts.escrow.maker.as_ref(),
         &ctx.accounts.escrow.seed.to_le_bytes(),
-        &[ctx.accounts.escrow.bump]
+        &[ctx.accounts.escrow.bump],
     ];
     let signer_seeds = &[&seeds[..]];
 
-    let cpi_ctx = CpiContext::new_with_signer(
-        ctx.accounts.token_program.key(), 
-        cpi_accounts, 
-        signer_seeds
-    );
+    let cpi_ctx =
+        CpiContext::new_with_signer(ctx.accounts.token_program.key(), cpi_accounts, signer_seeds);
     anchor_spl::token_interface::close_account(cpi_ctx)
 }

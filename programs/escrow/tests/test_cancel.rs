@@ -1,14 +1,7 @@
-// Regression test for the `close_vault` signer seeds.
-//
-// The escrow PDA is derived from ["escrow", maker, seed], but `close_vault` signed
-// with only ["escrow", maker] — so the derived address never matched the escrow and
-// the CPI could not be authorized. This test fails on main and passes with the fix.
-//
-// Each file in tests/ is its own crate, so the setup helpers are copied from
-// test_make.rs rather than shared.
-
 use anchor_lang::{
-    solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
+    prelude::Clock,
+    solana_program::instruction::Instruction,
+    InstructionData, ToAccountMetas,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
@@ -28,8 +21,6 @@ use spl_token_interface::{
 const SEED: u16 = 42;
 const AMOUNT_A: u64 = 1_000_000;
 const AMOUNT_B: u64 = 500_000;
-
-// ---------- copied from test_make.rs ----------
 
 fn setup_mint(svm: &mut LiteSVM, mint: &Keypair, authority: &Pubkey, decimals: u8) {
     let state = Mint {
@@ -86,8 +77,6 @@ fn setup_token_account(
     .unwrap();
 }
 
-// ---------- helpers ----------
-
 fn setup_svm() -> LiteSVM {
     let mut svm = LiteSVM::new();
     let bytes = include_bytes!("../../../target/deploy/escrow.so");
@@ -95,10 +84,6 @@ fn setup_svm() -> LiteSVM {
     svm
 }
 
-/// Sends one instruction signed by `payer`.
-///
-/// Takes `&Keypair` rather than `Keypair` so the caller can reuse the maker for a
-/// second transaction — a `&Keypair` is itself a `Signer`.
 fn send(
     svm: &mut LiteSVM,
     payer: &Keypair,
@@ -117,9 +102,12 @@ fn token_amount(svm: &LiteSVM, address: &Pubkey) -> u64 {
         .amount
 }
 
-/// Creates a funded maker and a live escrow holding AMOUNT_A of mint A.
-///
-/// Returns (maker, escrow PDA, mint A, maker's ATA for A, the escrow's vault).
+fn set_unix_timestamp(svm: &mut LiteSVM, unix_timestamp: i64) {
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp = unix_timestamp;
+    svm.set_sysvar(&clock);
+}
+
 fn setup_escrow(svm: &mut LiteSVM) -> (Keypair, Pubkey, Pubkey, Pubkey, Pubkey) {
     let maker = Keypair::new();
     let mint_a = Keypair::new();
@@ -134,7 +122,6 @@ fn setup_escrow(svm: &mut LiteSVM) -> (Keypair, Pubkey, Pubkey, Pubkey, Pubkey) 
     setup_mint(svm, &mint_a, &maker_pk, 6);
     setup_mint(svm, &mint_b, &maker_pk, 6);
 
-    // The maker must already hold the tokens `make` is about to move into the vault.
     let maker_ata_a = get_associated_token_address(&maker_pk, &mint_a_pk);
     setup_token_account(svm, maker_ata_a, mint_a_pk, maker_pk, AMOUNT_A);
 
@@ -143,7 +130,6 @@ fn setup_escrow(svm: &mut LiteSVM) -> (Keypair, Pubkey, Pubkey, Pubkey, Pubkey) 
         &escrow::id(),
     );
 
-    // `make` creates the vault, so only derive its address here.
     let vault_a = get_associated_token_address(&escrow_pda, &mint_a_pk);
 
     let ix = Instruction::new_with_bytes(
@@ -195,19 +181,52 @@ fn build_cancel_ix(
     )
 }
 
-// ---------- the test ----------
+#[test]
+fn cancel_too_early_fails_with_time_lock() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    let res = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    );
+
+    let err = res.expect_err("cancel should fail while the time lock is active");
+    let logs = err.meta.logs.join("\n");
+    assert!(
+        logs.contains("TimeLockActive"),
+        "expected the time lock error, got: {logs}"
+    );
+}
+
+#[test]
+fn cancel_at_exact_delay_succeeds() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    set_unix_timestamp(&mut svm, escrow::CANCEL_DELAY_SECONDS);
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel at created_at + delay should succeed");
+
+    assert_eq!(token_amount(&svm, &maker_ata_a), AMOUNT_A);
+}
 
 #[test]
 fn cancel_returns_the_tokens_to_the_maker() {
     let mut svm = setup_svm();
     let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
 
-    // Precondition: `make` moved the tokens out of the maker and into the vault.
-    assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");
-    assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should hold the deposit");
+    assert_eq!(token_amount(&svm, &maker_ata_a), 0);
+    assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A);
 
-    // On main this fails: `close_vault` signs with ["escrow", maker] and the escrow
-    // PDA is ["escrow", maker, seed], so the CPI signature is never granted.
+    set_unix_timestamp(&mut svm, escrow::CANCEL_DELAY_SECONDS + 1);
+
     send(
         &mut svm,
         &maker,
@@ -215,20 +234,7 @@ fn cancel_returns_the_tokens_to_the_maker() {
     )
     .expect("cancel should return the maker's tokens and close the vault");
 
-    // The deposit came home, whole.
-    assert_eq!(
-        token_amount(&svm, &maker_ata_a),
-        AMOUNT_A,
-        "maker should have every token back"
-    );
-
-    // Both accounts are gone and their rent was reclaimed.
-    assert!(
-        svm.get_account(&vault_a).is_none_or(|a| a.data.is_empty()),
-        "vault should be closed"
-    );
-    assert!(
-        svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
-        "escrow should be closed"
-    );
+    assert_eq!(token_amount(&svm, &maker_ata_a), AMOUNT_A);
+    assert!(svm.get_account(&vault_a).is_none_or(|a| a.data.is_empty()));
+    assert!(svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()));
 }

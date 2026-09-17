@@ -8,6 +8,7 @@
 // test_make.rs rather than shared.
 
 use anchor_lang::{
+    prelude::Clock,
     solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
 };
 use litesvm::LiteSVM;
@@ -195,12 +196,46 @@ fn build_cancel_ix(
     )
 }
 
+fn advance_clock(svm: &mut LiteSVM, seconds: i64) {
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += seconds;
+    svm.set_sysvar(&clock);
+}
+
 // ---------- the test ----------
+
+#[test]
+fn cancel_before_time_lock_fails() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    let result = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    );
+    assert!(result.is_err(), "cancel must fail before the time lock expires");
+}
+
+#[test]
+fn cancel_at_time_lock_boundary_succeeds() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+    advance_clock(&mut svm, 300);
+
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel should succeed exactly when the time lock expires");
+}
 
 #[test]
 fn cancel_returns_the_tokens_to_the_maker() {
     let mut svm = setup_svm();
     let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+    advance_clock(&mut svm, 301);
 
     // Precondition: `make` moved the tokens out of the maker and into the vault.
     assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");

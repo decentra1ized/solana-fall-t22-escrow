@@ -23,6 +23,7 @@ pub struct Escrow {
     pub amount_b: u64,
     pub seed: u16,
     pub bump: u8,
+    pub created_at: i64,
 }
 ```
 
@@ -35,6 +36,7 @@ pub struct Escrow {
 - amount_b: The amount of token B the maker expects to receive from the taker.
 - seed: A u16 seed used to derive the Escrow PDA, allowing a single maker to create multiple concurrent escrows.
 - bump: The canonical bump for the Escrow PDA.
+- created_at: The Unix timestamp captured when the escrow was made, used to enforce the cancellation time lock described below.
 
 ---
 
@@ -221,7 +223,7 @@ Here, we perform two transfers atomically: first, `amount_b` tokens flow from th
 
 ---
 
-### The maker can cancel the escrow at any time to reclaim their deposited tokens. For that, we create the following context:
+### The maker can cancel the escrow to reclaim their deposited tokens once a five-minute time lock has elapsed since the offer was made. For that, we create the following context:
 
 ```rust
 #[derive(Accounts)]
@@ -277,8 +279,10 @@ pub fn handler(ctx: Context<Cancel>) -> Result<()> {
 }
 ```
 
-Here, the escrow PDA signs a `transfer_checked` CPI to return all deposited tokens from the vault back to the maker's token account, then closes the now-empty vault to recover its rent.
+Before any of that runs, the handler checks the clock against `escrow.created_at + CANCEL_DELAY_SECONDS` (300 seconds) and fails with `TimeLockActive` if the window hasn't closed yet, without moving a single token. An offer that can be pulled with zero notice is a free option for the maker: they can watch the market for a few seconds and walk away the moment it turns against them, at the taker's expense. The delay gives a taker a real window to act on the offer before the maker can cancel it.
+
+Once the lock has cleared, the escrow PDA signs a `transfer_checked` CPI to return all deposited tokens from the vault back to the maker's token account, then closes the now-empty vault to recover its rent.
 
 ---
 
-This escrow program provides a trustless, non-custodial token swap mechanism on Solana. The maker locks token A in a program-controlled vault and specifies how much of token B they want in return. Any taker can fulfill the offer by sending the requested token B, atomically receiving token A in the same transaction. If no taker steps in, the maker can cancel at any time to reclaim their tokens — all without any intermediary.
+This escrow program provides a trustless, non-custodial token swap mechanism on Solana. The maker locks token A in a program-controlled vault and specifies how much of token B they want in return. Any taker can fulfill the offer by sending the requested token B, atomically receiving token A in the same transaction. If no taker steps in, the maker can cancel once the time lock has passed to reclaim their tokens — all without any intermediary.

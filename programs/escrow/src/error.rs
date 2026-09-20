@@ -4,4 +4,7 @@ use anchor_lang::prelude::*;
 pub enum ErrorCode {
     #[msg("Custom error message")]
     CustomError,
+
+    #[msg("Cannot cancel escrow before 5 mins have passed")]
+    TooEarlyToCancel,
 }

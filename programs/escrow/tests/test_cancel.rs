@@ -8,7 +8,9 @@
 // test_make.rs rather than shared.
 
 use anchor_lang::{
-    solana_program::instruction::Instruction, InstructionData, ToAccountMetas,
+    solana_program::{clock::Clock, instruction::Instruction}, 
+    InstructionData, 
+    ToAccountMetas,
 };
 use litesvm::LiteSVM;
 use solana_account::Account;
@@ -202,6 +204,10 @@ fn cancel_returns_the_tokens_to_the_maker() {
     let mut svm = setup_svm();
     let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
 
+    let mut clock = svm.get_sysvar::<Clock>();
+    clock.unix_timestamp += 300;
+    svm.set_sysvar(&clock);
+
     // Precondition: `make` moved the tokens out of the maker and into the vault.
     assert_eq!(token_amount(&svm, &maker_ata_a), 0, "maker should be empty after make");
     assert_eq!(token_amount(&svm, &vault_a), AMOUNT_A, "vault should hold the deposit");
@@ -232,3 +238,34 @@ fn cancel_returns_the_tokens_to_the_maker() {
         "escrow should be closed"
     );
 }
+
+fn cancel_fails_before_five_minutes() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) =
+        setup_escrow(&mut svm);
+
+    let mut clock = svm.get_sysvar::<Clock>();
+
+    clock.unix_timestamp += 299;
+    svm.set_sysvar(&clock);
+
+    let result = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(
+            &maker.pubkey(),
+            escrow_pda,
+            mint_a,
+            maker_ata_a,
+            vault_a,
+        ),
+    );
+
+    let err = result.unwrap_err();
+
+    assert!(
+    err.meta.logs.iter().any(|log| log.contains("TooEarlyToCancel")),
+    "expected TooEarlyToCancel"
+);
+}
+

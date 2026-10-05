@@ -173,6 +173,13 @@ fn setup_escrow(svm: &mut LiteSVM) -> (Keypair, Pubkey, Pubkey, Pubkey, Pubkey) 
     (maker, escrow_pda, mint_a_pk, maker_ata_a, vault_a)
 }
 
+
+fn warp_past_lock(svm: &mut LiteSVM) {
+    let mut clock = svm.get_sysvar::<anchor_lang::prelude::Clock>();
+    clock.unix_timestamp += 300;
+    svm.set_sysvar(&clock);
+}
+
 fn build_cancel_ix(
     maker: &Pubkey,
     escrow: Pubkey,
@@ -208,6 +215,7 @@ fn cancel_returns_the_tokens_to_the_maker() {
 
     // On main this fails: `close_vault` signs with ["escrow", maker] and the escrow
     // PDA is ["escrow", maker, seed], so the CPI signature is never granted.
+    warp_past_lock(&mut svm);
     send(
         &mut svm,
         &maker,
@@ -231,4 +239,38 @@ fn cancel_returns_the_tokens_to_the_maker() {
         svm.get_account(&escrow_pda).is_none_or(|a| a.data.is_empty()),
         "escrow should be closed"
     );
+}
+#[test]
+fn cancel_before_five_minutes_fails() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    let err = send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect_err("cancel should fail while the lock is active");
+
+    let msg = format!("{:?}", err);
+    assert!(
+        msg.contains("TimeLockActive"),
+        "expected TimeLockActive, got {msg}"
+    );
+}
+
+#[test]
+fn cancel_after_five_minutes_succeeds() {
+    let mut svm = setup_svm();
+    let (maker, escrow_pda, mint_a, maker_ata_a, vault_a) = setup_escrow(&mut svm);
+
+    warp_past_lock(&mut svm);
+    send(
+        &mut svm,
+        &maker,
+        build_cancel_ix(&maker.pubkey(), escrow_pda, mint_a, maker_ata_a, vault_a),
+    )
+    .expect("cancel should succeed after 300 seconds");
+
+    assert_eq!(token_amount(&svm, &maker_ata_a), AMOUNT_A);
 }
